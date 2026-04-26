@@ -10,6 +10,12 @@ RetroModem Bridge is a Windows serial-to-TCP modem bridge for vintage computers.
 
 ![Connected to a BBS](screenshots/CoCo3-connected.jpg)
 
+## Hardware I Use
+
+For my Tandy Color Computer 3 setup, I use a USB to DB25 RS-232 serial adapter connected to a Deluxe RS-232 Pak.
+
+[USB to DB25 RS-232 Serial Adapter](https://amzn.to/4czD1Yg)
+Disclosure: As an Amazon Associate, I may earn from qualifying purchases. Using this link does not increase the price you pay.
 
 It lets a retro computer with a serial terminal program dial Telnet BBSes using basic AT commands.
 
