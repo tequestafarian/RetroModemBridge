@@ -1,6 +1,18 @@
 # RetroModem Bridge
 
-RetroModem Bridge is a Windows serial-to-TCP modem bridge for vintage computers.
+RetroModem Bridge is a Windows app that helps vintage computers connect to Telnet-accessible BBSes.
+
+If your retro computer has a serial port and terminal software, RetroModem Bridge can act like a modem-style bridge between that computer and the internet. It was originally built for a Tandy / TRS-80 Color Computer 3, but it can also work with other systems such as Commodore, Apple II, Atari, Amiga, DOS PCs, and many other machines that support serial communication.
+
+You connect the retro computer to your Windows PC with a serial cable or USB-to-serial adapter. Then, from the terminal program on the retro computer, you dial a BBS using a command like:
+
+`ATDT bbs.example.com:23`
+
+RetroModem Bridge receives the command, opens a TCP connection from the Windows PC to that host and port, and passes data back and forth between the BBS and your retro computer.
+
+In simple terms, your Windows computer handles the modern network connection, while your retro computer gets the experience of using a modem.
+
+RetroModem Bridge supports basic Hayes-style AT commands. It is not intended to be a full hardware modem emulator, but it provides the core functionality needed for many terminal programs to connect to BBSes over TCP.
 
 ## Screenshots
 
