@@ -1,6 +1,6 @@
 # RetroModem Bridge 2.0
 
-RetroModem Bridge is a Windows serial-to-TCP modem bridge for vintage computers. It lets a retro computer use a serial connection to “dial” Telnet-accessible BBSes through a modern Windows PC.
+RetroModem Bridge is a Windows serial-to-TCP modem bridge for vintage computers. It lets a retro computer use a serial connection to "dial" Telnet-accessible BBSes through a modern Windows PC.
 
 ![RetroModem Bridge startup screen](screenshots/retromodem-bridge-startup.png)
 
