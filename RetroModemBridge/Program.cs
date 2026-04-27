@@ -7,6 +7,7 @@ internal static class Program
     {
         try
         {
+            System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
             ApplicationConfiguration.Initialize();
             Application.Run(new MainForm());
         }

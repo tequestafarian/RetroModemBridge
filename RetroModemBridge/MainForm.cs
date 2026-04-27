@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Drawing.Drawing2D;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 
 namespace RetroModemBridge;
@@ -14,6 +15,7 @@ public sealed class MainForm : Form
     private readonly CheckBox _echoCheck = new();
     private readonly CheckBox _telnetFilterCheck = new();
     private readonly CheckBox _rememberComPortCheck = new();
+    private readonly CheckBox _startupSoundCheck = new();
     private readonly ToolTip _toolTips = new();
     private readonly Button _refreshButton = new();
     private readonly Button _startButton = new();
@@ -26,6 +28,7 @@ public sealed class MainForm : Form
     private readonly Button _deleteDirectoryButton = new();
     private readonly Button _editDirectoryButton = new();
     private readonly Button _copyDialCommandButton = new();
+    private readonly Button _openTerminalButton = new();
     private readonly Button _importGuideButton = new();
     private readonly Button _importDirectoryButton = new();
     private readonly Button _exportDirectoryButton = new();
@@ -63,7 +66,7 @@ public sealed class MainForm : Form
 
 private void InitializeComponent()
 {
-    Text = "RetroModem Bridge v2 Beta";
+    Text = "RetroModem Bridge v3 Beta";
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(1180, 820);
     Size = new Size(1536, 966);
@@ -268,7 +271,7 @@ private void InitializeComponent()
         {
             Text = "Start the bridge, then dial from the retro computer terminal.",
             AutoSize = true,
-            Font = new Font("Segoe UI", 10F, FontStyle.Regular),
+            Font = new Font("Segoe UI", 9F, FontStyle.Regular),
             ForeColor = Color.FromArgb(70, 70, 70),
             Margin = new Padding(4, 4, 0, 0),
             BackColor = Color.White
@@ -467,7 +470,7 @@ private void InitializeComponent()
             AutoSize = true,
             FlowDirection = FlowDirection.LeftToRight,
             WrapContents = true,
-            Margin = new Padding(0, 14, 0, 0),
+            Margin = new Padding(0, 8, 0, 0),
             BackColor = Color.White
         };
 
@@ -566,7 +569,7 @@ private void InitializeComponent()
 private Control BuildDirectoryGroup()
 {
     var card = CreateCardPanel();
-    card.Padding = new Padding(18, 16, 18, 16);
+    card.Padding = new Padding(10, 10, 10, 10);
 
     var root = new TableLayoutPanel
     {
@@ -588,8 +591,8 @@ private Control BuildDirectoryGroup()
         Dock = DockStyle.Top,
         AutoSize = true,
         FlowDirection = FlowDirection.LeftToRight,
-        WrapContents = false,
-        Margin = new Padding(0, 8, 0, 14),
+        WrapContents = true,
+        Margin = new Padding(0, 6, 0, 8),
         BackColor = Color.White
     };
 
@@ -598,15 +601,20 @@ private Control BuildDirectoryGroup()
     _editDirectoryButton.Text = "✎  Edit";
     _deleteDirectoryButton.Text = "🗑  Delete";
     _copyDialCommandButton.Text = "✆  Dial";
+    _openTerminalButton.Text = "▣  Terminal";
 
-    StylePrimaryButton(_importGuideButton, Color.FromArgb(15, 104, 211), Color.FromArgb(12, 88, 178), 194, 44, 11F);
-    StyleSecondaryButton(_addDirectoryButton, Color.White, Color.FromArgb(185, 190, 198), Color.FromArgb(45, 45, 45), 124, 44, 10.5F);
-    StyleSecondaryButton(_editDirectoryButton, Color.White, Color.FromArgb(185, 190, 198), Color.FromArgb(45, 45, 45), 124, 44, 10.5F);
-    StyleSecondaryButton(_deleteDirectoryButton, Color.White, Color.FromArgb(185, 190, 198), Color.FromArgb(45, 45, 45), 136, 44, 10.5F);
-    StyleSecondaryButton(_copyDialCommandButton, Color.White, Color.FromArgb(185, 190, 198), Color.FromArgb(45, 45, 45), 116, 44, 10.5F);
+    StylePrimaryButton(_importGuideButton, Color.FromArgb(15, 104, 211), Color.FromArgb(12, 88, 178), 158, 36, 9.5F);
+    StyleSecondaryButton(_addDirectoryButton, Color.White, Color.FromArgb(185, 190, 198), Color.FromArgb(45, 45, 45), 82, 36, 9.5F);
+    StyleSecondaryButton(_editDirectoryButton, Color.White, Color.FromArgb(185, 190, 198), Color.FromArgb(45, 45, 45), 82, 36, 9.5F);
+    StyleSecondaryButton(_deleteDirectoryButton, Color.White, Color.FromArgb(185, 190, 198), Color.FromArgb(45, 45, 45), 96, 36, 9.5F);
+    StyleSecondaryButton(_copyDialCommandButton, Color.White, Color.FromArgb(185, 190, 198), Color.FromArgb(45, 45, 45), 82, 36, 9.5F);
+    StyleSecondaryButton(_openTerminalButton, Color.White, Color.FromArgb(15, 104, 211), Color.FromArgb(15, 104, 211), 112, 36, 9.5F);
 
-    foreach (var button in new[] { _importGuideButton, _addDirectoryButton, _editDirectoryButton, _deleteDirectoryButton, _copyDialCommandButton })
+    foreach (var button in new[] { _importGuideButton, _addDirectoryButton, _editDirectoryButton, _deleteDirectoryButton, _copyDialCommandButton, _openTerminalButton })
+    {
+        button.Margin = new Padding(0, 0, 8, 0);
         toolbar.Controls.Add(button);
+    }
     root.Controls.Add(toolbar, 0, 1);
 
     _directoryGrid.Dock = DockStyle.Fill;
@@ -623,12 +631,12 @@ private Control BuildDirectoryGroup()
     _directoryGrid.GridColor = Color.FromArgb(228, 232, 238);
     _directoryGrid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
     _directoryGrid.AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.None;
-    _directoryGrid.RowTemplate.Height = 52;
-    _directoryGrid.ColumnHeadersHeight = 44;
+    _directoryGrid.RowTemplate.Height = 36;
+    _directoryGrid.ColumnHeadersHeight = 34;
     _directoryGrid.ColumnHeadersDefaultCellStyle.BackColor = Color.White;
     _directoryGrid.ColumnHeadersDefaultCellStyle.ForeColor = Color.FromArgb(45, 45, 45);
-    _directoryGrid.ColumnHeadersDefaultCellStyle.Font = new Font("Segoe UI", 10.5F, FontStyle.Bold);
-    _directoryGrid.DefaultCellStyle.Font = new Font("Segoe UI", 10.5F, FontStyle.Regular);
+    _directoryGrid.ColumnHeadersDefaultCellStyle.Font = new Font("Segoe UI", 9.5F, FontStyle.Bold);
+    _directoryGrid.DefaultCellStyle.Font = new Font("Segoe UI", 9.5F, FontStyle.Regular);
     _directoryGrid.DefaultCellStyle.SelectionBackColor = Color.FromArgb(244, 247, 252);
     _directoryGrid.DefaultCellStyle.SelectionForeColor = Color.FromArgb(45, 45, 45);
     _directoryGrid.DefaultCellStyle.BackColor = Color.White;
@@ -637,11 +645,11 @@ private Control BuildDirectoryGroup()
     _directoryGrid.DataSource = _directory;
     if (_directoryGrid.Columns.Count == 0)
     {
-        _directoryGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "", Width = 42, ReadOnly = true, SortMode = DataGridViewColumnSortMode.NotSortable });
-        _directoryGrid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(BbsEntry.Alias), HeaderText = "Alias", Width = 120 });
-        _directoryGrid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(BbsEntry.Name), HeaderText = "Name", Width = 200 });
-        _directoryGrid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(BbsEntry.Host), HeaderText = "Host", Width = 260 });
-        _directoryGrid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(BbsEntry.Port), HeaderText = "Port", Width = 90 });
+        _directoryGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "", Width = 36, ReadOnly = true, SortMode = DataGridViewColumnSortMode.NotSortable });
+        _directoryGrid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(BbsEntry.Alias), HeaderText = "Alias", Width = 100 });
+        _directoryGrid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(BbsEntry.Name), HeaderText = "Name", Width = 180 });
+        _directoryGrid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(BbsEntry.Host), HeaderText = "Host", Width = 245 });
+        _directoryGrid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(BbsEntry.Port), HeaderText = "Port", Width = 80 });
         _directoryGrid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(BbsEntry.Notes), HeaderText = "Notes", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill });
     }
     _directoryGrid.CellFormatting -= DirectoryGridOnCellFormatting;
@@ -742,12 +750,14 @@ private Control BuildBottomPanel()
     bottomPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
     bottomPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
 
-    bottomPanel.Controls.Add(new Label
-    {
-        Text = string.Empty,
-        AutoSize = true,
-        BackColor = Color.FromArgb(247, 247, 248)
-    }, 0, 0);
+    _startupSoundCheck.Text = "Play startup sound";
+    _startupSoundCheck.AutoSize = true;
+    _startupSoundCheck.Anchor = AnchorStyles.Left;
+    _startupSoundCheck.Margin = new Padding(4, 6, 0, 0);
+    _startupSoundCheck.Font = new Font("Segoe UI", 9F, FontStyle.Regular);
+    _startupSoundCheck.ForeColor = Color.FromArgb(70, 70, 70);
+    _startupSoundCheck.BackColor = Color.FromArgb(247, 247, 248);
+    bottomPanel.Controls.Add(_startupSoundCheck, 0, 0);
 
     _statusLabel.Text = "Stopped.";
     _statusLabel.AutoSize = true;
@@ -812,11 +822,14 @@ private static Control CreateFieldPanel(string labelText, Control field, Control
         _editDirectoryButton.Click += (_, _) => EditSelectedDirectoryCell();
         _saveDirectoryButton.Click += (_, _) => { SaveSettingsFromUi(); AddLog("Directory saved."); };
         _copyDialCommandButton.Click += (_, _) => CopyDialCommand();
+        _openTerminalButton.Click += (_, _) => OpenSelectedInTerminal();
         _importGuideButton.Click += (_, _) => ImportFromTelnetBbsGuide();
         _importDirectoryButton.Click += (_, _) => ImportDirectory();
         _exportDirectoryButton.Click += (_, _) => ExportDirectory();
         _comPortCombo.SelectedIndexChanged += (_, _) => SaveComPortPreference();
         _rememberComPortCheck.CheckedChanged += (_, _) => SaveComPortPreference();
+        _startupSoundCheck.CheckedChanged += (_, _) => SaveStartupSoundPreference();
+        Shown += (_, _) => PlayStartupSoundIfEnabled();
 
         _bridge.Log += AddLog;
         _bridge.StatusChanged += SetStatus;
@@ -861,6 +874,7 @@ private static Control CreateFieldPanel(string labelText, Control field, Control
         _echoCheck.Checked = _settings.EchoEnabled;
         _telnetFilterCheck.Checked = _settings.TelnetFilteringEnabled;
         _rememberComPortCheck.Checked = _settings.RememberComPort;
+        _startupSoundCheck.Checked = _settings.PlayStartupSound;
     }
 
     private void SaveSettingsFromUi()
@@ -874,6 +888,7 @@ private static Control CreateFieldPanel(string labelText, Control field, Control
         _settings.RtsEnable = _rtsCheck.Checked;
         _settings.EchoEnabled = _echoCheck.Checked;
         _settings.TelnetFilteringEnabled = _telnetFilterCheck.Checked;
+        _settings.PlayStartupSound = _startupSoundCheck.Checked;
         _settings.DialDirectory = GetCleanDirectory();
         _settings.Save();
     }
@@ -894,6 +909,55 @@ private static Control CreateFieldPanel(string labelText, Control field, Control
         catch (Exception ex)
         {
             AddLog("Could not save COM port preference: " + ex.Message);
+        }
+    }
+
+    private void SaveStartupSoundPreference()
+    {
+        _settings.PlayStartupSound = _startupSoundCheck.Checked;
+
+        try
+        {
+            _settings.Save();
+            AddLog("Startup sound preference saved: " + (_settings.PlayStartupSound ? "enabled" : "disabled"));
+        }
+        catch (Exception ex)
+        {
+            AddLog("Could not save startup sound preference: " + ex.Message);
+        }
+    }
+
+    private void PlayStartupSoundIfEnabled()
+    {
+        if (!_startupSoundCheck.Checked)
+            return;
+
+        try
+        {
+            var soundPath = Path.Combine(AppContext.BaseDirectory, "Assets", "startup-modem.mp3");
+            if (!File.Exists(soundPath))
+            {
+                AddLog("Startup sound file not found: " + soundPath);
+                return;
+            }
+
+            // MCI is built into Windows and can play MP3 files without adding a large audio dependency.
+            mciSendString("close RetroModemStartupSound", null, 0, IntPtr.Zero);
+            var openCommand = $"open \"{soundPath}\" type mpegvideo alias RetroModemStartupSound";
+            var openResult = mciSendString(openCommand, null, 0, IntPtr.Zero);
+            if (openResult != 0)
+            {
+                AddLog("Could not open startup sound. MCI error: " + openResult);
+                return;
+            }
+
+            var playResult = mciSendString("play RetroModemStartupSound from 0 notify", null, 0, Handle);
+            if (playResult != 0)
+                AddLog("Could not play startup sound. MCI error: " + playResult);
+        }
+        catch (Exception ex)
+        {
+            AddLog("Startup sound failed: " + ex.Message);
         }
     }
 
@@ -1045,6 +1109,7 @@ private void ApplyBridgeButtonColors(bool running)
         _editDirectoryButton.Enabled = !running;
         _saveDirectoryButton.Enabled = !running;
         _copyDialCommandButton.Enabled = true;
+        _openTerminalButton.Enabled = true;
         _importGuideButton.Enabled = !running;
         _importDirectoryButton.Enabled = !running;
     }
@@ -1080,6 +1145,21 @@ private void ApplyBridgeButtonColors(bool running)
         _lightsPanel.SetLight(name, on);
     }
 
+    private void OpenSelectedInTerminal()
+    {
+        if (_directoryGrid.CurrentRow?.DataBoundItem is not BbsEntry entry || string.IsNullOrWhiteSpace(entry.Host))
+        {
+            MessageBox.Show(this, "Select a BBS entry first.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        if (entry.Port < 1 || entry.Port > 65535)
+            entry.Port = 23;
+
+        var form = new TerminalForm(entry);
+        form.Show(this);
+    }
+
     private void CopyDialCommand()
     {
         if (_directoryGrid.CurrentRow?.DataBoundItem is not BbsEntry entry || string.IsNullOrWhiteSpace(entry.Alias))
@@ -1105,7 +1185,7 @@ private void ApplyBridgeButtonColors(bool running)
         using var dialog = new SaveFileDialog
         {
             Filter = "Text files (*.txt)|*.txt|Log files (*.log)|*.log|All files (*.*)|*.*",
-            FileName = "RetroModemBridge-v2-beta-log.txt"
+            FileName = "RetroModemBridge-v3-beta-log.txt"
         };
 
         if (dialog.ShowDialog(this) == DialogResult.OK)
@@ -1123,11 +1203,40 @@ private void ApplyBridgeButtonColors(bool running)
 
     private void DeleteSelectedDirectoryRows()
     {
-        foreach (DataGridViewRow row in _directoryGrid.SelectedRows)
-        {
-            if (row.DataBoundItem is BbsEntry entry)
-                _directory.Remove(entry);
-        }
+        var entries = _directoryGrid.SelectedRows
+            .Cast<DataGridViewRow>()
+            .Select(row => row.DataBoundItem as BbsEntry)
+            .Where(entry => entry is not null)
+            .Cast<BbsEntry>()
+            .Distinct()
+            .ToList();
+
+        if (entries.Count == 0 && _directoryGrid.CurrentRow?.DataBoundItem is BbsEntry currentEntry)
+            entries.Add(currentEntry);
+
+        if (entries.Count == 0)
+            return;
+
+        var label = entries.Count == 1
+            ? $"Delete '{entries[0].Name}' from your BBS Directory?"
+            : $"Delete {entries.Count} selected BBS entries from your BBS Directory?";
+
+        var result = MessageBox.Show(
+            this,
+            label + "\n\nThis only removes the saved listing from your directory.",
+            "Confirm delete",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning,
+            MessageBoxDefaultButton.Button2);
+
+        if (result != DialogResult.Yes)
+            return;
+
+        foreach (var entry in entries)
+            _directory.Remove(entry);
+
+        SaveSettingsFromUi();
+        AddLog(entries.Count == 1 ? "Deleted BBS directory entry." : $"Deleted {entries.Count} BBS directory entries.");
     }
 
     private void ImportFromTelnetBbsGuide()
@@ -1186,7 +1295,7 @@ private void ApplyBridgeButtonColors(bool running)
         using var dialog = new SaveFileDialog
         {
             Filter = "JSON files (*.json)|*.json|All files (*.*)|*.*",
-            FileName = "bbs-list-v2-beta.json"
+            FileName = "bbs-list-v3-beta.json"
         };
 
         if (dialog.ShowDialog(this) != DialogResult.OK)
@@ -1370,4 +1479,7 @@ private void DirectoryGridOnCellFormatting(object? sender, DataGridViewCellForma
     e.Value = e.RowIndex == 0 ? "★" : "☆";
     e.FormattingApplied = true;
 }
+    [DllImport("winmm.dll", CharSet = CharSet.Unicode)]
+    private static extern int mciSendString(string command, string? returnValue, int returnLength, IntPtr winHandle);
+
 }

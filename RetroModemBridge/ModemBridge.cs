@@ -208,14 +208,14 @@ public sealed class ModemBridge : IDisposable
 
         if (upper == "ATI" || upper == "ATI0")
         {
-            SendResponse("RetroModem Bridge v2 Beta");
+            SendResponse("RetroModem Bridge v3 Beta");
             SendResponse("OK");
             return;
         }
 
         if (upper == "AT&V")
         {
-            SendResponse("RetroModem Bridge v2 Beta");
+            SendResponse("RetroModem Bridge v3 Beta");
             SendResponse("Default TCP port: " + DefaultTcpPort);
             SendResponse("Echo: " + (EchoEnabled ? "on" : "off"));
             SendResponse("Telnet filtering: " + (TelnetFilteringEnabled ? "on" : "off"));

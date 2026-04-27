@@ -12,14 +12,15 @@ public sealed class AppSettings
     public bool RtsEnable { get; set; } = true;
     public bool EchoEnabled { get; set; } = false;
     public bool TelnetFilteringEnabled { get; set; } = true;
+    public bool PlayStartupSound { get; set; } = true;
     public List<BbsEntry> DialDirectory { get; set; } = CreateDefaultDirectory();
 
     private static string PortableDir => AppContext.BaseDirectory;
-    private static string PortableSettingsPath => Path.Combine(PortableDir, "settings-v2-beta.json");
+    private static string PortableSettingsPath => Path.Combine(PortableDir, "settings-v3-beta.json");
     private static string AppDataSettingsPath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "RetroModemBridge",
-        "settings-v2-beta.json");
+        "settings-v3-beta.json");
 
     public static string SettingsPath => CanWritePortableSettings() ? PortableSettingsPath : AppDataSettingsPath;
 
