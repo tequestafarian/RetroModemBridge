@@ -31,15 +31,17 @@ Disclosure: As an Amazon Associate, I may earn from qualifying purchases. Using 
 
 It lets a retro computer with a serial terminal program dial Telnet BBSes using basic AT commands.
 
-## What is included in this package
+## What is included
 
-- Renamed from Coco Modem Bridge to RetroModem Bridge
-- App title changed to RetroModem Bridge
-- EXE name changed to RetroModemBridge.exe
-- COM dropdown shows friendly USB serial names when Windows exposes them
-- Refresh button for rescanning COM ports
+This repository includes the source code for RetroModem Bridge, along with simple publish scripts that can build a self-contained Windows EXE.
+
+The app includes:
+
+- A Windows UI for selecting the COM port and baud rate
+- Friendly USB serial device names when Windows provides them
+- A refresh button for rescanning COM ports
 - Live serial line status for CTS, DSR, DCD, DTR, and RTS
-- One-click publish scripts for creating a self-contained Windows EXE
+- Telnet/TCP bridge functionality for connecting vintage computers to BBSes
 
 ## Recommended starting settings
 
