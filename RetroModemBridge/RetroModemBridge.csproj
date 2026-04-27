@@ -5,7 +5,7 @@
     <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <AssemblyName>RetroModemBridge</AssemblyName>
+    <AssemblyName>RetroModemBridge-v2-beta</AssemblyName>
     <RootNamespace>RetroModemBridge</RootNamespace>
     <ApplicationIcon></ApplicationIcon>
   </PropertyGroup>
@@ -13,5 +13,11 @@
   <ItemGroup>
     <PackageReference Include="System.IO.Ports" Version="8.0.0" />
     <PackageReference Include="System.Management" Version="8.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="Data\TelnetBbsGuide\bbslist.csv" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Data\TelnetBbsGuide\SOURCE.txt" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets\retromodem-bridge-logo.png" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

@@ -55,7 +55,6 @@ public static class SerialPortDiscovery
         }
         catch
         {
-            // Friendly names are nice to have. If WMI is unavailable, plain COM names still work.
         }
 
         return names;

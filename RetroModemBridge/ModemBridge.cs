@@ -13,20 +13,36 @@ public sealed class ModemBridge : IDisposable
     private CancellationTokenSource? _networkCts;
     private readonly StringBuilder _commandBuffer = new();
     private bool _disposed;
+    private string? _lastDialString;
+    private long _serialRxBytes;
+    private long _serialTxBytes;
+    private long _tcpRxBytes;
+    private long _tcpTxBytes;
 
     public event Action<string>? Log;
     public event Action<string>? StatusChanged;
+    public event Action? TrafficChanged;
 
     public bool IsSerialOpen => _serialPort?.IsOpen == true;
     public bool IsConnected => _tcpClient?.Connected == true;
     public bool EchoEnabled { get; set; }
+    public bool TelnetFilteringEnabled { get; set; } = true;
     public int DefaultTcpPort { get; set; } = 23;
+    public IReadOnlyList<BbsEntry> DialDirectory { get; set; } = Array.Empty<BbsEntry>();
+    public string? CurrentConnection { get; private set; }
+    public string? LastCommand { get; private set; }
 
     public void OpenSerial(string portName, int baudRate, bool dtrEnable, bool rtsEnable)
     {
         ThrowIfDisposed();
-
         CloseSerial();
+
+        _serialRxBytes = 0;
+        _serialTxBytes = 0;
+        _tcpRxBytes = 0;
+        _tcpTxBytes = 0;
+        CurrentConnection = null;
+        LastCommand = null;
 
         _serialPort = new SerialPort(portName, baudRate, Parity.None, 8, StopBits.One)
         {
@@ -44,6 +60,7 @@ public sealed class ModemBridge : IDisposable
 
         LogMessage($"Opened {portName} at {baudRate} 8-N-1. DTR={(dtrEnable ? "on" : "off")}, RTS={(rtsEnable ? "on" : "off")}. ");
         SetStatus("Serial open. Waiting for AT commands.");
+        TrafficChanged?.Invoke();
     }
 
     public void CloseSerial()
@@ -70,6 +87,7 @@ public sealed class ModemBridge : IDisposable
         }
 
         SetStatus("Stopped.");
+        TrafficChanged?.Invoke();
     }
 
     public string GetLineStatusText()
@@ -80,13 +98,16 @@ public sealed class ModemBridge : IDisposable
 
         try
         {
-            return $"Line status: CTS={(port.CtsHolding ? "On" : "Off")}  DSR={(port.DsrHolding ? "On" : "Off")}  DCD={(port.CDHolding ? "On" : "Off")}  DTR={(port.DtrEnable ? "On" : "Off")}  RTS={(port.RtsEnable ? "On" : "Off")}";
+            return $"CTS={(port.CtsHolding ? "On" : "Off")}  DSR={(port.DsrHolding ? "On" : "Off")}  DCD={(port.CDHolding ? "On" : "Off")}  DTR={(port.DtrEnable ? "On" : "Off")}  RTS={(port.RtsEnable ? "On" : "Off")}";
         }
         catch (Exception ex)
         {
             return "Line status unavailable: " + ex.Message;
         }
     }
+
+    public string GetTrafficText() =>
+        $"Serial RX {_serialRxBytes:n0}  Serial TX {_serialTxBytes:n0}  TCP RX {_tcpRxBytes:n0}  TCP TX {_tcpTxBytes:n0}";
 
     private void SerialPortOnDataReceived(object sender, SerialDataReceivedEventArgs e)
     {
@@ -105,6 +126,9 @@ public sealed class ModemBridge : IDisposable
             if (read <= 0)
                 return;
 
+            _serialRxBytes += read;
+            TrafficChanged?.Invoke();
+
             if (IsConnected)
             {
                 var stream = _networkStream;
@@ -112,6 +136,8 @@ public sealed class ModemBridge : IDisposable
                 {
                     stream.Write(buffer, 0, read);
                     stream.Flush();
+                    _tcpTxBytes += read;
+                    TrafficChanged?.Invoke();
                 }
                 return;
             }
@@ -158,18 +184,42 @@ public sealed class ModemBridge : IDisposable
     {
         var command = rawCommand.Trim();
         var upper = command.ToUpperInvariant();
+        LastCommand = command;
 
         LogMessage("Terminal > " + command);
+        TrafficChanged?.Invoke();
 
-        if (upper == "A/" || upper == "AT" || upper == "ATZ" || upper == "AT&F")
+        if (upper == "A/")
         {
+            if (!string.IsNullOrWhiteSpace(_lastDialString))
+                await DialAsync(_lastDialString).ConfigureAwait(false);
+            else
+                SendResponse("ERROR");
+            return;
+        }
+
+        if (upper == "AT" || upper == "ATZ" || upper == "AT&F")
+        {
+            if (upper is "ATZ" or "AT&F")
+                LogMessage("Modem settings reset command accepted.");
             SendResponse("OK");
             return;
         }
 
         if (upper == "ATI" || upper == "ATI0")
         {
-            SendResponse("RetroModem Bridge 1.0");
+            SendResponse("RetroModem Bridge v2 Beta");
+            SendResponse("OK");
+            return;
+        }
+
+        if (upper == "AT&V")
+        {
+            SendResponse("RetroModem Bridge v2 Beta");
+            SendResponse("Default TCP port: " + DefaultTcpPort);
+            SendResponse("Echo: " + (EchoEnabled ? "on" : "off"));
+            SendResponse("Telnet filtering: " + (TelnetFilteringEnabled ? "on" : "off"));
+            SendResponse("Last dial: " + (_lastDialString ?? "none"));
             SendResponse("OK");
             return;
         }
@@ -186,6 +236,18 @@ public sealed class ModemBridge : IDisposable
         {
             HangUp("ATH received");
             SendResponse("OK");
+            return;
+        }
+
+        if (upper == "ATDL")
+        {
+            if (string.IsNullOrWhiteSpace(_lastDialString))
+            {
+                SendResponse("ERROR");
+                return;
+            }
+
+            await DialAsync(_lastDialString).ConfigureAwait(false);
             return;
         }
 
@@ -212,7 +274,11 @@ public sealed class ModemBridge : IDisposable
 
         HangUp("Preparing new dial command", silent: true);
 
-        var parsed = ParseDialString(dialString, DefaultTcpPort);
+        var resolved = ResolveDialString(dialString);
+        if (resolved.AliasEntry is not null)
+            LogMessage($"Dial alias {dialString} resolved to {resolved.AliasEntry.Name} {resolved.AliasEntry.Host}:{resolved.AliasEntry.Port}.");
+
+        var parsed = ParseDialString(resolved.DialString, DefaultTcpPort);
         if (parsed is null)
         {
             SendResponse("ERROR");
@@ -220,6 +286,7 @@ public sealed class ModemBridge : IDisposable
         }
 
         var (host, port) = parsed.Value;
+        _lastDialString = dialString;
         LogMessage($"Dialing {host}:{port}...");
         SetStatus($"Dialing {host}:{port}...");
 
@@ -236,9 +303,11 @@ public sealed class ModemBridge : IDisposable
                 _networkCts = new CancellationTokenSource();
             }
 
+            CurrentConnection = $"{host}:{port}";
             SendResponse("CONNECT");
             LogMessage($"Connected to {host}:{port}.");
             SetStatus($"Connected to {host}:{port}");
+            TrafficChanged?.Invoke();
 
             _ = Task.Run(() => PumpNetworkToSerialAsync(_networkCts.Token));
         }
@@ -249,6 +318,19 @@ public sealed class ModemBridge : IDisposable
             SendResponse("NO CARRIER");
             HangUp("Connect failed", silent: true);
         }
+    }
+
+    private (string DialString, BbsEntry? AliasEntry) ResolveDialString(string dialString)
+    {
+        var cleaned = dialString.Trim();
+        var entry = DialDirectory.FirstOrDefault(e =>
+            !string.IsNullOrWhiteSpace(e.Alias) &&
+            string.Equals(e.Alias.Trim(), cleaned, StringComparison.OrdinalIgnoreCase));
+
+        if (entry is null)
+            return (cleaned, null);
+
+        return ($"{entry.Host}:{entry.Port}", entry);
     }
 
     private static (string Host, int Port)? ParseDialString(string dialString, int defaultPort)
@@ -296,9 +378,17 @@ public sealed class ModemBridge : IDisposable
                 if (read <= 0)
                     break;
 
+                _tcpRxBytes += read;
+                var outbound = TelnetFilteringEnabled ? FilterTelnet(buffer, read, stream) : buffer.Take(read).ToArray();
+
                 var port = _serialPort;
-                if (port is not null && port.IsOpen)
-                    port.Write(buffer, 0, read);
+                if (outbound.Length > 0 && port is not null && port.IsOpen)
+                {
+                    port.Write(outbound, 0, outbound.Length);
+                    _serialTxBytes += outbound.Length;
+                }
+
+                TrafficChanged?.Invoke();
             }
         }
         catch (OperationCanceledException)
@@ -319,6 +409,78 @@ public sealed class ModemBridge : IDisposable
         }
     }
 
+    private byte[] FilterTelnet(byte[] buffer, int length, NetworkStream stream)
+    {
+        const byte Iac = 255;
+        const byte Do = 253;
+        const byte Dont = 254;
+        const byte Will = 251;
+        const byte Wont = 252;
+        const byte Sb = 250;
+        const byte Se = 240;
+
+        var output = new List<byte>(length);
+
+        for (var i = 0; i < length; i++)
+        {
+            var b = buffer[i];
+            if (b != Iac)
+            {
+                output.Add(b);
+                continue;
+            }
+
+            if (i + 1 >= length)
+                break;
+
+            var command = buffer[++i];
+            if (command == Iac)
+            {
+                output.Add(Iac);
+                continue;
+            }
+
+            if (command is Do or Dont or Will or Wont)
+            {
+                if (i + 1 >= length)
+                    break;
+
+                var option = buffer[++i];
+                var responseCommand = command == Do ? Wont : command == Will ? Dont : (byte)0;
+                if (responseCommand != 0)
+                {
+                    try
+                    {
+                        stream.Write(new[] { Iac, responseCommand, option }, 0, 3);
+                        stream.Flush();
+                        _tcpTxBytes += 3;
+                    }
+                    catch (Exception ex)
+                    {
+                        LogMessage("Telnet negotiation response failed: " + ex.Message);
+                    }
+                }
+
+                continue;
+            }
+
+            if (command == Sb)
+            {
+                while (i + 1 < length)
+                {
+                    i++;
+                    if (buffer[i] == Iac && i + 1 < length && buffer[i + 1] == Se)
+                    {
+                        i++;
+                        break;
+                    }
+                }
+            }
+        }
+
+        return output.ToArray();
+    }
+
     public void HangUp(string reason, bool silent = false)
     {
         lock (_sync)
@@ -332,6 +494,9 @@ public sealed class ModemBridge : IDisposable
             _networkStream = null;
             _tcpClient = null;
         }
+
+        CurrentConnection = null;
+        TrafficChanged?.Invoke();
 
         if (!silent)
         {
@@ -352,7 +517,11 @@ public sealed class ModemBridge : IDisposable
         {
             var port = _serialPort;
             if (port is not null && port.IsOpen)
+            {
                 port.Write(text);
+                _serialTxBytes += Encoding.ASCII.GetByteCount(text);
+                TrafficChanged?.Invoke();
+            }
         }
         catch (Exception ex)
         {
@@ -366,7 +535,11 @@ public sealed class ModemBridge : IDisposable
         {
             var port = _serialPort;
             if (port is not null && port.IsOpen)
+            {
                 port.Write(new[] { value }, 0, 1);
+                _serialTxBytes++;
+                TrafficChanged?.Invoke();
+            }
         }
         catch (Exception ex)
         {
