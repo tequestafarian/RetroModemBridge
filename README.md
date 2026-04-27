@@ -1,11 +1,3 @@
-## RetroModem Bridge 2.0
-
-See the full feature overview here:
-
-[RetroModem Bridge 2.0 Features](RetroModemBridge-2.0-FEATURES.md)
-
-![RetroModem Bridge startup screen](screenshots/retromodem-bridge-startup.png)
-
 # RetroModem Bridge
 
 RetroModem Bridge is a Windows app that helps vintage computers connect to Telnet-accessible BBSes.
