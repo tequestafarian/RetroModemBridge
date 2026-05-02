@@ -12,18 +12,18 @@ public sealed class AppSettings
     public bool RtsEnable { get; set; } = true;
     public bool EchoEnabled { get; set; } = false;
     public bool TelnetFilteringEnabled { get; set; } = true;
-    public bool PlayStartupSound { get; set; } = true;
+    public bool PlayStartupSound { get; set; } = false;
     public List<BbsEntry> DialDirectory { get; set; } = CreateDefaultDirectory();
     public List<DialHistoryEntry> DialHistory { get; set; } = new();
     public List<RetroComputerProfile> Profiles { get; set; } = CreateDefaultProfiles();
     public string FeaturedBbsAlias { get; set; } = "1";
 
     private static string PortableDir => AppContext.BaseDirectory;
-    private static string PortableSettingsPath => Path.Combine(PortableDir, "settings-v3-beta.json");
+    private static string PortableSettingsPath => Path.Combine(PortableDir, "settings-v3.4.json");
     private static string AppDataSettingsPath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "RetroModemBridge",
-        "settings-v3-beta.json");
+        "settings-v3.4.json");
 
     public static string SettingsPath => CanWritePortableSettings() ? PortableSettingsPath : AppDataSettingsPath;
 
@@ -84,7 +84,8 @@ public sealed class AppSettings
 
     private static List<BbsEntry> CreateDefaultDirectory() =>
     [
-        new BbsEntry { Alias = "1", Name = "Dark Realms", Host = "darkrealms.ca", Port = 23, Category = "General BBS", SystemType = "Telnet BBS", SupportsAnsi = true, IsFavorite = true, Notes = "ANSI BBS" },
-        new BbsEntry { Alias = "coco", Name = "CoCoNet", Host = "coconet.ddns.net", Port = 6809, Category = "CoCo / Tandy", SystemType = "CoCo BBS", SupportsAnsi = true, IsFavorite = true, Notes = "CoCoNet BBS" }
+        new BbsEntry { Alias = "1", Name = "Dark Realms", Host = "darkrealms.ca", Port = 23, EntryType = "Telnet", Category = "General BBS", SystemType = "Telnet BBS", SupportsAnsi = true, IsFavorite = true, Notes = "ANSI BBS" },
+        new BbsEntry { Alias = "coco", Name = "CoCoNet", Host = "coconet.ddns.net", Port = 6809, EntryType = "Telnet", Category = "CoCo / Tandy", SystemType = "CoCo BBS", SupportsAnsi = true, IsFavorite = true, Notes = "CoCoNet BBS" },
+        new BbsEntry { Alias = "usurper", Name = "Usurper Reborn", Host = "local-door", Port = 0, EntryType = "Door", Category = "Door Games", SystemType = "Local Door", SupportsAnsi = true, IsFavorite = true, DoorDropFileType = "DOOR32.SYS", DoorNodeNumber = 1, DoorUserName = "CoCo Caller", Notes = "Example local door entry. Edit it and point Executable to Usurper Reborn." }
     ];
 }

@@ -1,7 +1,9 @@
 bin/
 obj/
+publish/
+*.user
+*.suo
 .vs/
-*.exe
-*.dll
-*.pdb
-*.zip
+settings-v3.4.json
+settings-v3-beta.json
+*.log

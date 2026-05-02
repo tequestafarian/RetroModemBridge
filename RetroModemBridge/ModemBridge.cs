@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO.Ports;
 using System.Net.Sockets;
 using System.Text;
@@ -11,6 +12,24 @@ public sealed class ModemBridge : IDisposable
     private TcpClient? _tcpClient;
     private NetworkStream? _networkStream;
     private CancellationTokenSource? _networkCts;
+    private Process? _doorProcess;
+    private CancellationTokenSource? _doorCts;
+    private Stream? _doorInput;
+    private bool _doorSawCarriageReturn;
+    private bool _currentDoorAutoEnterSingleKeys;
+    private bool _doorNextInputLooksSingleKeyPrompt;
+    private readonly StringBuilder _doorRecentOutput = new();
+    private bool _currentDoorPauseLongOutput;
+    private int _currentDoorLinesPerPage = 21;
+    private string _currentDoorMorePrompt = "-- More -- Space/Enter=next, B=back -- ";
+    private int _currentDoorMorePromptRow = 24;
+    private int _doorMorePromptEraseLength;
+    private bool _doorPagingPaused;
+    private int _doorOutputLineCount;
+    private TaskCompletionSource<bool>? _doorMorePromptWaiter;
+    private readonly MemoryStream _doorCurrentPage = new();
+    private readonly List<byte[]> _doorOutputPages = new();
+    private int _doorReviewPageIndex = -1;
     private readonly StringBuilder _commandBuffer = new();
     private bool _localBbsSessionActive;
     private LocalBbsMenuMode _localBbsMenuMode = LocalBbsMenuMode.Main;
@@ -26,6 +45,7 @@ public sealed class ModemBridge : IDisposable
     private long _serialTxBytes;
     private long _tcpRxBytes;
     private long _tcpTxBytes;
+    private int _currentBaudRate = 19200;
 
     public event Action<string>? Log;
     public event Action<string>? StatusChanged;
@@ -35,7 +55,9 @@ public sealed class ModemBridge : IDisposable
     public event Action<byte[]>? SessionMirrorBytes;
 
     public bool IsSerialOpen => _serialPort?.IsOpen == true;
-    public bool IsConnected => _tcpClient?.Connected == true;
+    public bool IsTcpConnected => _tcpClient?.Connected == true;
+    public bool IsDoorConnected => _doorProcess is { HasExited: false };
+    public bool IsConnected => IsTcpConnected || IsDoorConnected;
     public bool EchoEnabled { get; set; }
     public bool TelnetFilteringEnabled { get; set; } = true;
     public int DefaultTcpPort { get; set; } = 23;
@@ -82,7 +104,13 @@ public sealed class ModemBridge : IDisposable
 
         try
         {
-            if (IsConnected)
+            if (IsDoorConnected)
+            {
+                WriteDoorInput(bytes, bytes.Length);
+                return;
+            }
+
+            if (IsTcpConnected)
             {
                 var stream = _networkStream;
                 if (stream is not null && stream.CanWrite)
@@ -116,6 +144,7 @@ public sealed class ModemBridge : IDisposable
         _tcpTxBytes = 0;
         CurrentConnection = null;
         LastCommand = null;
+        _currentBaudRate = baudRate;
         ResetLocalBbsSession();
 
         _serialPort = new SerialPort(portName, baudRate, Parity.None, 8, StopBits.One)
@@ -203,7 +232,13 @@ public sealed class ModemBridge : IDisposable
             _serialRxBytes += read;
             TrafficChanged?.Invoke();
 
-            if (IsConnected)
+            if (IsDoorConnected)
+            {
+                WriteDoorInput(buffer, read);
+                return;
+            }
+
+            if (IsTcpConnected)
             {
                 var stream = _networkStream;
                 if (stream is not null && stream.CanWrite)
@@ -288,19 +323,20 @@ public sealed class ModemBridge : IDisposable
 
         if (upper == "ATI" || upper == "ATI0")
         {
-            SendResponse("RetroModem Bridge v3 Beta");
-            SendResponse("BBS Companion features: HELP, TIME, MENU, BBSLIST, FAVORITES");
+            SendResponse("RetroModem Bridge v3.4");
+            SendResponse("BBS Companion features: HELP, TIME, MENU, BBSLIST, DOORS, FAVORITES");
             SendResponse("OK");
             return;
         }
 
         if (upper == "AT&V")
         {
-            SendResponse("RetroModem Bridge v3 Beta");
+            SendResponse("RetroModem Bridge v3.4");
             SendResponse("Default TCP port: " + DefaultTcpPort);
             SendResponse("Echo: " + (EchoEnabled ? "on" : "off"));
             SendResponse("Telnet filtering: " + (TelnetFilteringEnabled ? "on" : "off"));
-            SendResponse("Saved BBS entries: " + DialDirectory.Count);
+            SendResponse("Saved BBS entries: " + DialDirectory.Count(e => !e.IsDoorGame));
+            SendResponse("Saved door games: " + DialDirectory.Count(e => e.IsDoorGame));
             SendResponse("Dial history entries: " + DialHistory.Count);
             SendResponse("Last dial: " + (_lastDialString ?? "none"));
             SendResponse("OK");
@@ -373,7 +409,16 @@ public sealed class ModemBridge : IDisposable
 
         var resolved = ResolveDialString(dialString);
         if (resolved.AliasEntry is not null)
+        {
+            if (resolved.AliasEntry.IsDoorGame)
+            {
+                LogMessage($"Dial alias {dialString} resolved to local door game {resolved.AliasEntry.DisplayName}.");
+                await StartDoorGameAsync(resolved.AliasEntry, dialString, started).ConfigureAwait(false);
+                return;
+            }
+
             LogMessage($"Dial alias {dialString} resolved to {resolved.AliasEntry.Name} {resolved.AliasEntry.Host}:{resolved.AliasEntry.Port}.");
+        }
 
         var parsed = ParseDialString(resolved.DialString, DefaultTcpPort);
         if (parsed is null)
@@ -425,7 +470,7 @@ public sealed class ModemBridge : IDisposable
     private bool TryHandleTextService(string dialString, DateTime started)
     {
         var key = dialString.Trim().ToUpperInvariant();
-        if (key != "TIME" && key != "HELP" && key != "MENU" && key != "BBSLIST" && key != "FAVORITES" && key != "NEWS" && key != "FEATURED" && key != "RANDOM" && key != "ONLINE" && key != "GUIDE" && key != "IMPORT" && key != "UPDATEGUIDE" && key != "UPDATE")
+        if (key != "TIME" && key != "HELP" && key != "MENU" && key != "BBSLIST" && key != "DOORS" && key != "FAVORITES" && key != "NEWS" && key != "FEATURED" && key != "RANDOM" && key != "ONLINE" && key != "GUIDE" && key != "IMPORT" && key != "UPDATEGUIDE" && key != "UPDATE")
             return false;
 
         LogMessage("Text service requested: " + key);
@@ -466,9 +511,10 @@ public sealed class ModemBridge : IDisposable
         {
             "TIME" => BuildAnsiTimeScreen(includeMenuPrompt: false),
             "HELP" => BuildAnsiHelpScreen(includeMenuPrompt: false),
-            "BBSLIST" => BuildAnsiBbsListScreen(DialDirectory, "BBS DIRECTORY", includeDialPrompt: false),
-            "FAVORITES" => BuildAnsiBbsListScreen(DialDirectory.Where(e => e.IsFavorite), "FAVORITES", includeDialPrompt: false),
-            "ONLINE" => BuildAnsiBbsListScreen(DialDirectory.Where(e => e.LastResult.Contains("Online", StringComparison.OrdinalIgnoreCase) || e.LastResult.Contains("Connected", StringComparison.OrdinalIgnoreCase)), "RECENTLY ONLINE", includeDialPrompt: false),
+            "BBSLIST" => BuildAnsiBbsListScreen(DialDirectory.Where(e => !e.IsDoorGame), "BBS DIRECTORY", includeDialPrompt: false),
+            "DOORS" => BuildAnsiBbsListScreen(DialDirectory.Where(e => e.IsDoorGame), "DOOR GAMES", includeDialPrompt: false),
+            "FAVORITES" => BuildAnsiBbsListScreen(DialDirectory.Where(e => !e.IsDoorGame && e.IsFavorite), "FAVORITES", includeDialPrompt: false),
+            "ONLINE" => BuildAnsiBbsListScreen(DialDirectory.Where(e => !e.IsDoorGame && (e.LastResult.Contains("Online", StringComparison.OrdinalIgnoreCase) || e.LastResult.Contains("Connected", StringComparison.OrdinalIgnoreCase))), "RECENTLY ONLINE", includeDialPrompt: false),
             "FEATURED" => BuildAnsiFeaturedScreen(),
             "RANDOM" => BuildAnsiRandomScreen(),
             "NEWS" => BuildAnsiNewsScreen(),
@@ -534,14 +580,17 @@ public sealed class ModemBridge : IDisposable
             return;
         }
 
-        if (_localBbsMenuMode is LocalBbsMenuMode.SearchDirectory or LocalBbsMenuMode.SearchFavorites)
+        if (_localBbsMenuMode is LocalBbsMenuMode.SearchDirectory or LocalBbsMenuMode.SearchFavorites or LocalBbsMenuMode.SearchDoorGames)
         {
             _localBbsSearchText = choice.Trim();
             _localBbsPage = 0;
 
-            _localBbsMenuMode = _localBbsMenuMode == LocalBbsMenuMode.SearchFavorites
-                ? LocalBbsMenuMode.Favorites
-                : LocalBbsMenuMode.Directory;
+            _localBbsMenuMode = _localBbsMenuMode switch
+            {
+                LocalBbsMenuMode.SearchFavorites => LocalBbsMenuMode.Favorites,
+                LocalBbsMenuMode.SearchDoorGames => LocalBbsMenuMode.DoorGames,
+                _ => LocalBbsMenuMode.Directory
+            };
 
             RefreshLocalBbsCurrentList();
             WriteSerialText(BuildAnsiPagedBbsListScreen());
@@ -689,7 +738,7 @@ public sealed class ModemBridge : IDisposable
             return;
         }
 
-        if (_localBbsMenuMode is LocalBbsMenuMode.Directory or LocalBbsMenuMode.Favorites)
+        if (_localBbsMenuMode is LocalBbsMenuMode.Directory or LocalBbsMenuMode.Favorites or LocalBbsMenuMode.DoorGames)
         {
             var totalPages = GetLocalBbsTotalPages();
 
@@ -711,9 +760,12 @@ public sealed class ModemBridge : IDisposable
 
             if (upper is "S" or "SEARCH" or "FIND")
             {
-                _localBbsMenuMode = _localBbsMenuMode == LocalBbsMenuMode.Favorites
-                    ? LocalBbsMenuMode.SearchFavorites
-                    : LocalBbsMenuMode.SearchDirectory;
+                _localBbsMenuMode = _localBbsMenuMode switch
+                {
+                    LocalBbsMenuMode.Favorites => LocalBbsMenuMode.SearchFavorites,
+                    LocalBbsMenuMode.DoorGames => LocalBbsMenuMode.SearchDoorGames,
+                    _ => LocalBbsMenuMode.SearchDirectory
+                };
                 WriteSerialText(BuildAnsiSearchPromptScreen());
                 return;
             }
@@ -809,6 +861,18 @@ public sealed class ModemBridge : IDisposable
                 break;
 
             case "9":
+            case "O":
+            case "DOOR":
+            case "DOORS":
+            case "DOORGAMES":
+                _localBbsMenuMode = LocalBbsMenuMode.DoorGames;
+                _localBbsSearchText = string.Empty;
+                _localBbsPage = 0;
+                RefreshLocalBbsCurrentList();
+                WriteSerialText(BuildAnsiPagedBbsListScreen());
+                break;
+
+            case "10":
             case "G":
             case "GUIDE":
             case "IMPORT":
@@ -819,7 +883,7 @@ public sealed class ModemBridge : IDisposable
                 WriteSerialText(BuildAnsiGuideListScreen());
                 break;
 
-            case "10":
+            case "11":
             case "U":
             case "UPDATE":
             case "UPDATEGUIDE":
@@ -828,7 +892,7 @@ public sealed class ModemBridge : IDisposable
                 break;
 
             default:
-                WriteSerialText(BuildAnsiErrorLine("Unknown menu choice. Enter 1-9, U update, M menu, or Q quit."));
+                WriteSerialText(BuildAnsiErrorLine("Unknown menu choice. Enter 1-11, M menu, or Q quit."));
                 break;
         }
     }
@@ -893,18 +957,20 @@ public sealed class ModemBridge : IDisposable
 
         sb.Append(Ansi.BrightBlue).Append("  │")
           .Append(Ansi.Yellow).Append("  [9] ")
-          .Append(Ansi.BrightWhite).Append("Browse Import Guide".PadRight(28))
-          .Append(Ansi.Yellow).Append("  [U] ")
-          .Append(Ansi.BrightWhite).Append("Update Guide".PadRight(28))
+          .Append(Ansi.BrightWhite).Append("Door Games".PadRight(28))
+          .Append(Ansi.Yellow).Append("  [10] ")
+          .Append(Ansi.BrightWhite).Append("Browse Import Guide".PadRight(27))
           .Append(Ansi.BrightBlue).Append("│\r\n");
 
         sb.Append(Ansi.BrightBlue).Append("  │")
+          .Append(Ansi.Yellow).Append("  [11] ")
+          .Append(Ansi.BrightWhite).Append("Update Guide".PadRight(27))
           .Append(Ansi.Red).Append("  [Q] ")
-          .Append(Ansi.BrightWhite).Append("Disconnect".PadRight(61))
+          .Append(Ansi.BrightWhite).Append("Disconnect".PadRight(28))
           .Append(Ansi.BrightBlue).Append("│\r\n");
 
         sb.Append(Ansi.BrightBlue).Append("  └").Append(new string('─', innerWidth)).Append("┘\r\n");
-        sb.Append(Ansi.Line(Ansi.Dim, $"  Boards: {DialDirectory.Count}   Favorites: {DialDirectory.Count(e => e.IsFavorite)}   History: {DialHistory.Count}\r\n"));
+        sb.Append(Ansi.Line(Ansi.Dim, $"  Boards: {DialDirectory.Count(e => !e.IsDoorGame)}   Doors: {DialDirectory.Count(e => e.IsDoorGame)}   Favorites: {DialDirectory.Count(e => !e.IsDoorGame && e.IsFavorite)}\r\n"));
         sb.Append(BuildAnsiPrompt());
         return sb.ToString();
     }
@@ -987,11 +1053,11 @@ public sealed class ModemBridge : IDisposable
     private string BuildAnsiFeaturedScreen()
     {
         var featured = DialDirectory
-            .Where(e => e.IsFavorite && !string.IsNullOrWhiteSpace(e.Host))
+            .Where(e => !e.IsDoorGame && e.IsFavorite && !string.IsNullOrWhiteSpace(e.Host))
             .OrderByDescending(e => e.LastResult.Contains("Online", StringComparison.OrdinalIgnoreCase))
             .ThenBy(e => e.Name)
             .FirstOrDefault()
-            ?? DialDirectory.FirstOrDefault(e => !string.IsNullOrWhiteSpace(e.Host));
+            ?? DialDirectory.FirstOrDefault(e => !e.IsDoorGame && !string.IsNullOrWhiteSpace(e.Host));
 
         var sb = new StringBuilder();
         sb.Append(Ansi.Clear);
@@ -1017,11 +1083,11 @@ public sealed class ModemBridge : IDisposable
     private string BuildAnsiRandomScreen()
     {
         var candidates = DialDirectory
-            .Where(e => e.IsFavorite && !string.IsNullOrWhiteSpace(e.Host))
+            .Where(e => !e.IsDoorGame && e.IsFavorite && !string.IsNullOrWhiteSpace(e.Host))
             .ToList();
 
         if (candidates.Count == 0)
-            candidates = DialDirectory.Where(e => !string.IsNullOrWhiteSpace(e.Host)).ToList();
+            candidates = DialDirectory.Where(e => !e.IsDoorGame && !string.IsNullOrWhiteSpace(e.Host)).ToList();
 
         var pick = candidates.Count == 0 ? null : candidates[Random.Shared.Next(candidates.Count)];
 
@@ -1048,10 +1114,19 @@ public sealed class ModemBridge : IDisposable
 
     private void RefreshLocalBbsCurrentList()
     {
-        IEnumerable<BbsEntry> entries = DialDirectory.Where(e => !string.IsNullOrWhiteSpace(e.Host));
+        IEnumerable<BbsEntry> entries = DialDirectory;
 
-        if (_localBbsMenuMode is LocalBbsMenuMode.Favorites or LocalBbsMenuMode.SearchFavorites)
-            entries = entries.Where(e => e.IsFavorite);
+        if (_localBbsMenuMode is LocalBbsMenuMode.DoorGames or LocalBbsMenuMode.SearchDoorGames)
+        {
+            entries = entries.Where(e => e.IsDoorGame);
+        }
+        else
+        {
+            entries = entries.Where(e => !e.IsDoorGame && !string.IsNullOrWhiteSpace(e.Host));
+
+            if (_localBbsMenuMode is LocalBbsMenuMode.Favorites or LocalBbsMenuMode.SearchFavorites)
+                entries = entries.Where(e => e.IsFavorite);
+        }
 
         if (!string.IsNullOrWhiteSpace(_localBbsSearchText))
             entries = entries.Where(e => MatchesLocalBbsSearch(e, _localBbsSearchText));
@@ -1078,7 +1153,9 @@ public sealed class ModemBridge : IDisposable
             || entry.Category.Contains(search, StringComparison.OrdinalIgnoreCase)
             || entry.SystemType.Contains(search, StringComparison.OrdinalIgnoreCase)
             || entry.Notes.Contains(search, StringComparison.OrdinalIgnoreCase)
-            || entry.LastResult.Contains(search, StringComparison.OrdinalIgnoreCase);
+            || entry.LastResult.Contains(search, StringComparison.OrdinalIgnoreCase)
+            || entry.DoorExecutablePath.Contains(search, StringComparison.OrdinalIgnoreCase)
+            || entry.DoorWorkingDirectory.Contains(search, StringComparison.OrdinalIgnoreCase);
     }
 
     private int GetLocalBbsTotalPages()
@@ -1096,7 +1173,12 @@ public sealed class ModemBridge : IDisposable
 
     private string BuildAnsiPagedBbsListScreen()
     {
-        var title = _localBbsMenuMode == LocalBbsMenuMode.Favorites ? "FAVORITES" : "BBS DIRECTORY";
+        var title = _localBbsMenuMode switch
+        {
+            LocalBbsMenuMode.Favorites => "FAVORITES",
+            LocalBbsMenuMode.DoorGames => "DOOR GAMES",
+            _ => "BBS DIRECTORY"
+        };
         var list = GetLocalBbsPageEntries();
         var totalPages = GetLocalBbsTotalPages();
 
@@ -1115,7 +1197,12 @@ public sealed class ModemBridge : IDisposable
 
         if (list.Count == 0)
         {
-            sb.Append(Ansi.Line(Ansi.Yellow, _localBbsMenuMode == LocalBbsMenuMode.Favorites ? "  No matching favorites found.\r\n" : "  No matching BBS entries found.\r\n"));
+            sb.Append(Ansi.Line(Ansi.Yellow, _localBbsMenuMode switch
+            {
+                LocalBbsMenuMode.Favorites => "  No matching favorites found.\r\n",
+                LocalBbsMenuMode.DoorGames => "  No matching door games found.\r\n",
+                _ => "  No matching BBS entries found.\r\n"
+            }));
         }
         else
         {
@@ -1126,7 +1213,7 @@ public sealed class ModemBridge : IDisposable
                 var star = entry.IsFavorite ? "*" : " ";
                 var name = Truncate(string.IsNullOrWhiteSpace(entry.Name) ? entry.DialTarget : entry.Name.Trim(), 26);
                 var alias = Truncate(string.IsNullOrWhiteSpace(entry.Alias) ? entry.DialTarget : entry.Alias.Trim(), 12);
-                var ansi = entry.SupportsAnsi ? "ANSI" : "TXT ";
+                var ansi = entry.IsDoorGame ? "DOOR" : (entry.SupportsAnsi ? "ANSI" : "TXT ");
                 var status = Truncate(string.IsNullOrWhiteSpace(entry.LastResult) ? "" : entry.LastResult, 10);
 
                 sb.Append(Ansi.Yellow).Append("  [").Append(number).Append("] ");
@@ -1141,7 +1228,7 @@ public sealed class ModemBridge : IDisposable
         }
 
         sb.Append("\r\n");
-        sb.Append(Ansi.Line(Ansi.Dim, "  01-15 = dial  N = next  P = prev  S = search  C = clear\r\n"));
+        sb.Append(Ansi.Line(Ansi.Dim, "  01-15 = dial/launch  N = next  P = prev  S = search  C = clear\r\n"));
         sb.Append(Ansi.Line(Ansi.Dim, "  M = main menu  Q = disconnect\r\n"));
         sb.Append(BuildAnsiPrompt());
         return sb.ToString();
@@ -1149,15 +1236,18 @@ public sealed class ModemBridge : IDisposable
 
     private string BuildAnsiSearchPromptScreen()
     {
-        var title = _localBbsMenuMode == LocalBbsMenuMode.SearchFavorites
-            ? "SEARCH FAVORITES"
-            : "SEARCH DIRECTORY";
+        var title = _localBbsMenuMode switch
+        {
+            LocalBbsMenuMode.SearchFavorites => "SEARCH FAVORITES",
+            LocalBbsMenuMode.SearchDoorGames => "SEARCH DOOR GAMES",
+            _ => "SEARCH DIRECTORY"
+        };
 
         var sb = new StringBuilder();
         sb.Append(Ansi.Clear);
         sb.Append(Ansi.Home);
         sb.Append(BuildAnsiHeader("RetroModem Bridge", title));
-        sb.Append(Ansi.Line(Ansi.BrightWhite, "  Search by name, alias, host, category, system, notes,\r\n"));
+        sb.Append(Ansi.Line(Ansi.BrightWhite, "  Search by name, alias, host/path, category, system, notes,\r\n"));
         sb.Append(Ansi.Line(Ansi.BrightWhite, "  or last connection result.\r\n\r\n"));
         sb.Append(Ansi.Line(Ansi.Dim, "  Examples: coco, mystic, ansi, games, florida, online\r\n\r\n"));
         sb.Append(Ansi.Line(Ansi.Yellow, "  Search for: "));
@@ -1167,7 +1257,7 @@ public sealed class ModemBridge : IDisposable
     private void RefreshLocalGuideCurrentList()
     {
         var existing = DialDirectory
-            .Where(e => !string.IsNullOrWhiteSpace(e.Host))
+            .Where(e => !e.IsDoorGame && !string.IsNullOrWhiteSpace(e.Host))
             .Select(e => $"{e.Host.Trim().ToLowerInvariant()}:{e.Port}")
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
@@ -1225,6 +1315,7 @@ public sealed class ModemBridge : IDisposable
     private BbsEntry AddGuideEntryToDirectory(BbsGuideEntry guideEntry)
     {
         var existing = DialDirectory.FirstOrDefault(e =>
+            !e.IsDoorGame &&
             string.Equals(e.Host.Trim(), guideEntry.Host.Trim(), StringComparison.OrdinalIgnoreCase) &&
             e.Port == guideEntry.Port);
 
@@ -1295,7 +1386,7 @@ public sealed class ModemBridge : IDisposable
     private (int DirectoryCount, int GuideCount, int NewCount, int AlreadyAddedCount, int FavoritesCount, int OnlineCount) GetGuideStats()
     {
         var directoryEntries = DialDirectory
-            .Where(e => !string.IsNullOrWhiteSpace(e.Host))
+            .Where(e => !e.IsDoorGame && !string.IsNullOrWhiteSpace(e.Host))
             .ToList();
 
         var existing = directoryEntries
@@ -1547,7 +1638,7 @@ public sealed class ModemBridge : IDisposable
     private string BuildAnsiBbsListScreen(IEnumerable<BbsEntry> entries, string title, bool includeDialPrompt)
     {
         var list = entries
-            .Where(e => !string.IsNullOrWhiteSpace(e.Host))
+            .Where(e => e.IsDoorGame || !string.IsNullOrWhiteSpace(e.Host))
             .OrderByDescending(e => e.IsFavorite)
             .ThenBy(e => e.Name)
             .ThenBy(e => e.Alias)
@@ -1561,7 +1652,12 @@ public sealed class ModemBridge : IDisposable
 
         if (list.Count == 0)
         {
-            sb.Append(Ansi.Line(Ansi.Yellow, title == "FAVORITES" ? "  No favorites saved yet.\r\n" : "  No BBS entries saved yet.\r\n"));
+            var emptyMessage = title == "FAVORITES"
+                ? "  No favorites saved yet.\r\n"
+                : title == "DOOR GAMES"
+                    ? "  No door games saved yet.\r\n"
+                    : "  No BBS entries saved yet.\r\n";
+            sb.Append(Ansi.Line(Ansi.Yellow, emptyMessage));
         }
         else
         {
@@ -1572,7 +1668,7 @@ public sealed class ModemBridge : IDisposable
                 var star = entry.IsFavorite ? "*" : " ";
                 var name = Truncate(string.IsNullOrWhiteSpace(entry.Name) ? entry.DialTarget : entry.Name.Trim(), 24);
                 var alias = Truncate(string.IsNullOrWhiteSpace(entry.Alias) ? entry.DialTarget : entry.Alias.Trim(), 12);
-                var ansi = entry.SupportsAnsi ? "ANSI" : "TXT ";
+                var ansi = entry.IsDoorGame ? "DOOR" : (entry.SupportsAnsi ? "ANSI" : "TXT ");
 
                 sb.Append(Ansi.Yellow).Append("  [").Append(number).Append("] ");
                 sb.Append(entry.IsFavorite ? Ansi.Magenta : Ansi.Dim).Append(star).Append(' ');
@@ -1586,13 +1682,13 @@ public sealed class ModemBridge : IDisposable
         sb.Append("\r\n");
         if (includeDialPrompt)
         {
-            sb.Append(Ansi.Line(Ansi.Dim, "  Enter a listed number to dial that BBS.\r\n"));
+            sb.Append(Ansi.Line(Ansi.Dim, title == "DOOR GAMES" ? "  Enter a listed number to launch that door game.\r\n" : "  Enter a listed number to dial that BBS.\r\n"));
             sb.Append(Ansi.Line(Ansi.Dim, "  M = main menu, Q = disconnect\r\n"));
             sb.Append(BuildAnsiPrompt());
         }
         else
         {
-            sb.Append(Ansi.Line(Ansi.Dim, "  Dial from your terminal with ATDT ALIAS.\r\n\r\n"));
+            sb.Append(Ansi.Line(Ansi.Dim, title == "DOOR GAMES" ? "  Launch from your terminal with ATDT ALIAS.\r\n\r\n" : "  Dial from your terminal with ATDT ALIAS.\r\n\r\n"));
             sb.Append(Ansi.Line(Ansi.Green, "OK\r\n"));
         }
 
@@ -1656,7 +1752,7 @@ public sealed class ModemBridge : IDisposable
         sb.Append(Ansi.Line(Ansi.Yellow, "  ATDT HOST:PORT      ") + Ansi.Line(Ansi.BrightWhite, "Dial direct Telnet host\r\n"));
         sb.Append(Ansi.Line(Ansi.Yellow, "  ATDL                ") + Ansi.Line(Ansi.BrightWhite, "Redial last number\r\n"));
         sb.Append(Ansi.Line(Ansi.Yellow, "  ATH                 ") + Ansi.Line(Ansi.BrightWhite, "Hang up\r\n\r\n"));
-        sb.Append(Ansi.Line(Ansi.Magenta, "  Local services: ATDT MENU, HELP, TIME, BBSLIST, FAVORITES\r\n"));
+        sb.Append(Ansi.Line(Ansi.Magenta, "  Local services: ATDT MENU, HELP, TIME, BBSLIST, DOORS, FAVORITES\r\n"));
         sb.Append(Ansi.Line(Ansi.Magenta, "                  ATDT NEWS, RANDOM, FEATURED, ONLINE, GUIDE, UPDATEGUIDE\r\n"));
         sb.Append(Ansi.Line(Ansi.Dim, "  Directory menu: N next, P previous, S search, C clear search\r\n\r\n"));
         sb.Append(includeMenuPrompt ? BuildAnsiPrompt() : Ansi.Line(Ansi.Green, "OK\r\n"));
@@ -1726,6 +1822,563 @@ public sealed class ModemBridge : IDisposable
             return (cleaned, null);
 
         return ($"{entry.Host}:{entry.Port}", entry);
+    }
+
+
+    private async Task StartDoorGameAsync(BbsEntry entry, string dialString, DateTime started)
+    {
+        var executable = entry.DoorExecutablePath.Trim();
+        if (string.IsNullOrWhiteSpace(executable) || !File.Exists(executable))
+        {
+            SendResponse("NO CARRIER");
+            var message = string.IsNullOrWhiteSpace(executable)
+                ? "Door executable is not configured. Edit the directory entry and set DoorExecutablePath."
+                : "Door executable not found: " + executable;
+            LogMessage(message);
+            MarkDirectoryResult(entry, "Door not configured");
+            RecordHistory(dialString, "local-door", 0, "Door not configured", started);
+            return;
+        }
+
+        var workingDir = string.IsNullOrWhiteSpace(entry.DoorWorkingDirectory)
+            ? Path.GetDirectoryName(executable) ?? AppContext.BaseDirectory
+            : entry.DoorWorkingDirectory.Trim();
+
+        Directory.CreateDirectory(workingDir);
+        var node = entry.DoorNodeNumber < 1 ? 1 : entry.DoorNodeNumber;
+        _currentDoorAutoEnterSingleKeys = entry.DoorAutoEnterSingleKeys;
+        _currentDoorPauseLongOutput = entry.DoorPauseLongOutput;
+        _currentDoorLinesPerPage = entry.DoorLinesPerPage < 5 ? 21 : entry.DoorLinesPerPage;
+        _currentDoorMorePrompt = string.IsNullOrWhiteSpace(entry.DoorMorePrompt) ? "-- More -- Space/Enter=next, B=back -- " : entry.DoorMorePrompt;
+        _currentDoorMorePromptRow = entry.DoorMorePromptRow < 1 ? 24 : Math.Min(60, entry.DoorMorePromptRow);
+        var nodeDir = Path.Combine(AppContext.BaseDirectory, "DoorNodes", "Node" + node);
+        Directory.CreateDirectory(nodeDir);
+
+        var dropFileName = string.IsNullOrWhiteSpace(entry.DoorDropFileType) ? "DOOR32.SYS" : entry.DoorDropFileType.Trim();
+        if (!dropFileName.EndsWith(".SYS", StringComparison.OrdinalIgnoreCase))
+            dropFileName = "DOOR32.SYS";
+
+        var nodeDropPath = Path.Combine(nodeDir, dropFileName);
+        var workingDropPath = Path.Combine(workingDir, dropFileName);
+        WriteDoor32DropFile(nodeDropPath, entry, node, _currentBaudRate);
+        if (!string.Equals(nodeDropPath, workingDropPath, StringComparison.OrdinalIgnoreCase))
+            WriteDoor32DropFile(workingDropPath, entry, node, _currentBaudRate);
+
+        var args = ExpandDoorArguments(entry.DoorArguments, nodeDropPath, workingDropPath, node);
+
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = executable,
+                Arguments = args,
+                WorkingDirectory = workingDir,
+                UseShellExecute = false,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+                StandardInputEncoding = Encoding.GetEncoding(437),
+                StandardOutputEncoding = Encoding.GetEncoding(437),
+                StandardErrorEncoding = Encoding.GetEncoding(437)
+            };
+
+            var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
+            var cts = new CancellationTokenSource();
+
+            if (!process.Start())
+                throw new InvalidOperationException("Door process did not start.");
+
+            lock (_sync)
+            {
+                _doorProcess = process;
+                _doorCts = cts;
+                _doorInput = process.StandardInput.BaseStream;
+                _doorSawCarriageReturn = false;
+                _doorNextInputLooksSingleKeyPrompt = false;
+                _doorRecentOutput.Clear();
+                _doorPagingPaused = false;
+                _doorOutputLineCount = 0;
+                _doorMorePromptWaiter = null;
+                _doorCurrentPage.SetLength(0);
+                _doorOutputPages.Clear();
+                _doorReviewPageIndex = -1;
+            }
+
+            CurrentConnection = "Door: " + entry.DisplayName;
+            SendResponse("CONNECT");
+            LogMessage($"Started local door game: {entry.DisplayName}");
+            LogMessage("Door32 drop file: " + workingDropPath);
+            SetStatus("Local door game active: " + entry.DisplayName);
+            MarkDirectoryResult(entry, "Door launched");
+            RecordHistory(dialString, "local-door", 0, "Door launched", started);
+            TrafficChanged?.Invoke();
+
+            _ = Task.Run(() => PumpDoorToSerialAsync(process.StandardOutput.BaseStream, cts.Token, "Door output"));
+            _ = Task.Run(() => PumpDoorToSerialAsync(process.StandardError.BaseStream, cts.Token, "Door error"));
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await process.WaitForExitAsync(cts.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                }
+                finally
+                {
+                    if (!cts.IsCancellationRequested)
+                    {
+                        HangUp("Door game exited", silent: true);
+                        SendResponse("NO CARRIER");
+                        SetStatus("Door game exited.");
+                    }
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            LogMessage("Door launch failed: " + ex.Message);
+            SetStatus("Door launch failed.");
+            SendResponse("NO CARRIER");
+            MarkDirectoryResult(entry, "Door failed: " + ex.Message);
+            RecordHistory(dialString, "local-door", 0, "Door failed", started);
+            HangUp("Door launch failed", silent: true);
+        }
+    }
+
+    private static void WriteDoor32DropFile(string path, BbsEntry entry, int node, int baudRate)
+    {
+        var userName = string.IsNullOrWhiteSpace(entry.DoorUserName) ? "CoCo Caller" : entry.DoorUserName.Trim();
+        var lines = new[]
+        {
+            "0",
+            "0",
+            Math.Max(300, baudRate).ToString(),
+            "GameSrv",
+            "1",
+            userName,
+            userName,
+            "255",
+            "60",
+            entry.SupportsAnsi ? "1" : "0",
+            node.ToString()
+        };
+
+        File.WriteAllText(path, string.Join("\r\n", lines) + "\r\n", Encoding.ASCII);
+    }
+
+    private static string ExpandDoorArguments(string arguments, string nodeDropPath, string workingDropPath, int node)
+    {
+        if (string.IsNullOrWhiteSpace(arguments))
+            return string.Empty;
+
+        return arguments
+            .Replace("{door32}", QuoteIfNeeded(workingDropPath), StringComparison.OrdinalIgnoreCase)
+            .Replace("{nodeDoor32}", QuoteIfNeeded(nodeDropPath), StringComparison.OrdinalIgnoreCase)
+            .Replace("{dropdir}", QuoteIfNeeded(Path.GetDirectoryName(workingDropPath) ?? string.Empty), StringComparison.OrdinalIgnoreCase)
+            .Replace("{nodedir}", QuoteIfNeeded(Path.GetDirectoryName(nodeDropPath) ?? string.Empty), StringComparison.OrdinalIgnoreCase)
+            .Replace("{node}", node.ToString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string QuoteIfNeeded(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return "\"\"";
+        return value.Contains(' ') && !value.StartsWith('"') ? "\"" + value + "\"" : value;
+    }
+
+    private void WriteDoorInput(byte[] buffer, int length)
+    {
+        try
+        {
+            if (HandleDoorPagingKey(buffer, length))
+                return;
+
+            var input = _doorInput;
+            if (input is null)
+                return;
+
+            // Door games running in STDIO mode often behave like line-oriented
+            // console apps instead of true serial character devices.  Single-key
+            // prompts such as M/F or "Press any key" may not advance until a
+            // newline arrives.  DoorAutoEnterSingleKeys appends Enter after a
+            // single printable key, which makes those prompts work from retro
+            // terminals.  It can be turned off per door if a door needs normal
+            // text entry.
+            var normalized = NormalizeDoorInput(buffer, length);
+            if (normalized.Length == 0)
+                return;
+
+            input.Write(normalized, 0, normalized.Length);
+            input.Flush();
+            _tcpTxBytes += normalized.Length;
+            TrafficChanged?.Invoke();
+        }
+        catch (Exception ex)
+        {
+            LogMessage("Door input error: " + ex.Message);
+            HangUp("Door input error");
+        }
+    }
+
+    private byte[] NormalizeDoorInput(byte[] buffer, int length)
+    {
+        using var output = new MemoryStream(length + 2);
+
+        for (var i = 0; i < length; i++)
+        {
+            var value = buffer[i];
+
+            if (value == 0x0D) // CR from the retro terminal
+            {
+                output.WriteByte(0x0D);
+                output.WriteByte(0x0A);
+                _doorSawCarriageReturn = true;
+                continue;
+            }
+
+            if (value == 0x0A && _doorSawCarriageReturn)
+            {
+                // Swallow the LF part of CRLF so doors do not see a double Enter.
+                _doorSawCarriageReturn = false;
+                continue;
+            }
+
+            _doorSawCarriageReturn = false;
+            output.WriteByte(value);
+        }
+
+        var bytes = output.ToArray();
+
+        if (_currentDoorAutoEnterSingleKeys && IsSinglePrintableKey(bytes) && ConsumeDoorSingleKeyPromptFlag())
+        {
+            LogMessage("Door input assist: appended Enter for a one-key prompt.");
+            return new[] { bytes[0], (byte)0x0D, (byte)0x0A };
+        }
+
+        return bytes;
+    }
+
+    private bool ConsumeDoorSingleKeyPromptFlag()
+    {
+        lock (_sync)
+        {
+            if (!_doorNextInputLooksSingleKeyPrompt)
+                return false;
+
+            _doorNextInputLooksSingleKeyPrompt = false;
+            return true;
+        }
+    }
+
+    private static bool IsSinglePrintableKey(byte[] bytes)
+    {
+        if (bytes.Length != 1)
+            return false;
+
+        var value = bytes[0];
+        return value >= 0x20 && value <= 0x7E;
+    }
+
+    private void ObserveDoorOutputForInputAssist(byte[] buffer, int length)
+    {
+        if (!_currentDoorAutoEnterSingleKeys || length <= 0)
+            return;
+
+        string text;
+        try
+        {
+            text = Encoding.GetEncoding(437).GetString(buffer, 0, length);
+        }
+        catch
+        {
+            text = Encoding.ASCII.GetString(buffer, 0, length);
+        }
+
+        // Strip ANSI escape sequences enough for prompt sniffing.  This is not
+        // meant to render ANSI, only to recognize common one-key prompts.
+        text = StripAnsiForPromptDetection(text);
+
+        lock (_sync)
+        {
+            _doorRecentOutput.Append(text);
+            if (_doorRecentOutput.Length > 1200)
+                _doorRecentOutput.Remove(0, _doorRecentOutput.Length - 1200);
+
+            var recent = _doorRecentOutput.ToString().ToLowerInvariant();
+            _doorNextInputLooksSingleKeyPrompt =
+                recent.Contains("press any key") ||
+                recent.Contains("hit any key") ||
+                recent.Contains("strike any key") ||
+                recent.Contains("any key to continue") ||
+                recent.Contains("male or female") ||
+                recent.Contains("[m/f]") ||
+                recent.Contains("(m/f)") ||
+                recent.Contains("m/f") ||
+                recent.Contains("m or f") ||
+                recent.Contains("male/female") ||
+                recent.Contains("yes/no") ||
+                recent.Contains("[y/n]") ||
+                recent.Contains("(y/n)") ||
+                recent.Contains("y/n");
+        }
+    }
+
+    private static string StripAnsiForPromptDetection(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+            return string.Empty;
+
+        var sb = new StringBuilder(text.Length);
+        var inEscape = false;
+
+        foreach (var ch in text)
+        {
+            if (!inEscape && ch == '\x1B')
+            {
+                inEscape = true;
+                continue;
+            }
+
+            if (inEscape)
+            {
+                if ((ch >= '@' && ch <= '~') || char.IsLetter(ch))
+                    inEscape = false;
+                continue;
+            }
+
+            if (!char.IsControl(ch) || ch == '\r' || ch == '\n')
+                sb.Append(ch);
+        }
+
+        return sb.ToString();
+    }
+
+    private async Task PumpDoorToSerialAsync(Stream stream, CancellationToken token, string label)
+    {
+        var buffer = new byte[4096];
+
+        try
+        {
+            while (!token.IsCancellationRequested)
+            {
+                var read = await stream.ReadAsync(buffer.AsMemory(0, buffer.Length), token).ConfigureAwait(false);
+                if (read <= 0)
+                    break;
+
+                _tcpRxBytes += read;
+                ObserveDoorOutputForInputAssist(buffer, read);
+                await SendDoorOutputToSerialAsync(buffer, read, token).ConfigureAwait(false);
+                TrafficChanged?.Invoke();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            LogMessage(label + " read error: " + ex.Message);
+        }
+    }
+
+    private async Task SendDoorOutputToSerialAsync(byte[] buffer, int length, CancellationToken token)
+    {
+        if (!_currentDoorPauseLongOutput || _currentDoorLinesPerPage < 5)
+        {
+            WriteDoorBytesToSerial(buffer, length, recordPage: false);
+            return;
+        }
+
+        var chunkStart = 0;
+        for (var i = 0; i < length; i++)
+        {
+            var value = buffer[i];
+            var isLineBreak = value == 0x0A || value == 0x0D;
+
+            if (!isLineBreak)
+                continue;
+
+            if (value == 0x0A && i > 0 && buffer[i - 1] == 0x0D)
+                continue;
+
+            var chunkLength = i - chunkStart + 1;
+            if (chunkLength > 0)
+                WriteDoorBytesToSerial(buffer.AsSpan(chunkStart, chunkLength).ToArray(), chunkLength, recordPage: true);
+
+            chunkStart = i + 1;
+            _doorOutputLineCount++;
+
+            if (_doorOutputLineCount >= _currentDoorLinesPerPage)
+            {
+                FinalizeDoorOutputPage();
+                await PauseForDoorMorePromptAsync(token).ConfigureAwait(false);
+                _doorOutputLineCount = 0;
+            }
+        }
+
+        if (chunkStart < length)
+        {
+            var remainingLength = length - chunkStart;
+            WriteDoorBytesToSerial(buffer.AsSpan(chunkStart, remainingLength).ToArray(), remainingLength, recordPage: true);
+        }
+    }
+
+    private void WriteDoorBytesToSerial(byte[] outbound, int length, bool recordPage)
+    {
+        if (length <= 0)
+            return;
+
+        if (recordPage)
+            _doorCurrentPage.Write(outbound, 0, length);
+
+        RaiseSessionMirrorBytes(outbound.Take(length).ToArray());
+
+        var port = _serialPort;
+        if (port is not null && port.IsOpen)
+        {
+            port.Write(outbound, 0, length);
+            _serialTxBytes += length;
+        }
+    }
+
+    private void FinalizeDoorOutputPage()
+    {
+        lock (_sync)
+        {
+            if (_doorCurrentPage.Length > 0)
+            {
+                _doorOutputPages.Add(_doorCurrentPage.ToArray());
+                while (_doorOutputPages.Count > 50)
+                    _doorOutputPages.RemoveAt(0);
+                _doorCurrentPage.SetLength(0);
+            }
+
+            _doorReviewPageIndex = _doorOutputPages.Count - 1;
+        }
+    }
+
+    private async Task PauseForDoorMorePromptAsync(CancellationToken token)
+    {
+        TaskCompletionSource<bool> waiter;
+
+        lock (_sync)
+        {
+            if (_doorPagingPaused)
+                return;
+
+            _doorPagingPaused = true;
+            waiter = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _doorMorePromptWaiter = waiter;
+        }
+
+        ShowDoorMorePrompt();
+        LogMessage("Door paging paused. Press Space/Enter to continue or B to replay previous pages.");
+
+        using var registration = token.Register(() => waiter.TrySetCanceled(token));
+        await waiter.Task.ConfigureAwait(false);
+    }
+
+    private bool HandleDoorPagingKey(byte[] buffer, int length)
+    {
+        TaskCompletionSource<bool>? waiter = null;
+
+        lock (_sync)
+        {
+            if (!_doorPagingPaused)
+                return false;
+        }
+
+        var key = FirstPrintableDoorKey(buffer, length);
+        if (key == 'b' || key == 'B')
+        {
+            ReplayDoorScrollbackPage();
+            return true;
+        }
+
+        ClearDoorMorePrompt();
+
+        lock (_sync)
+        {
+            _doorPagingPaused = false;
+            _doorOutputLineCount = 0;
+            _doorReviewPageIndex = -1;
+            waiter = _doorMorePromptWaiter;
+            _doorMorePromptWaiter = null;
+        }
+
+        waiter?.TrySetResult(true);
+        return true;
+    }
+
+    private static char? FirstPrintableDoorKey(byte[] buffer, int length)
+    {
+        for (var i = 0; i < length; i++)
+        {
+            var value = buffer[i];
+            if (value >= 0x20 && value <= 0x7E)
+                return (char)value;
+
+            if (value == 0x0D || value == 0x0A)
+                return '\n';
+        }
+
+        return null;
+    }
+
+    private void ReplayDoorScrollbackPage()
+    {
+        byte[]? page = null;
+        int pageNumber = 0;
+
+        lock (_sync)
+        {
+            if (_doorOutputPages.Count == 0)
+                return;
+
+            if (_doorReviewPageIndex < 0 || _doorReviewPageIndex >= _doorOutputPages.Count)
+                _doorReviewPageIndex = _doorOutputPages.Count - 1;
+
+            page = _doorOutputPages[_doorReviewPageIndex];
+            pageNumber = _doorReviewPageIndex + 1;
+            if (_doorReviewPageIndex > 0)
+                _doorReviewPageIndex--;
+        }
+
+        ClearDoorMorePrompt();
+        WriteSerialText("\r\n-- Back page " + pageNumber + " --\r\n");
+        if (page is not null && page.Length > 0)
+            WriteDoorBytesToSerial(page, page.Length, recordPage: false);
+        ShowDoorMorePrompt();
+    }
+
+    private void ShowDoorMorePrompt()
+    {
+        var prompt = string.IsNullOrWhiteSpace(_currentDoorMorePrompt)
+            ? "-- More -- Space/Enter=next, B=back -- "
+            : _currentDoorMorePrompt;
+
+        // Do not use ANSI cursor positioning for the More prompt.  Some retro
+        // terminals, including NetMate in certain modes, can misread cursor
+        // positioning while a door is actively drawing ANSI screens, which made
+        // the prompt appear around row 8 no matter what row was configured.
+        //
+        // The safer behavior is an inline pager: after a completed output line,
+        // return to column 1, draw the prompt, then erase that same line with
+        // carriage-return + spaces + carriage-return when the caller presses a key.
+        _doorMorePromptEraseLength = Math.Max(prompt.Length, _doorMorePromptEraseLength);
+        WriteSerialText("\r" + prompt);
+    }
+
+    private void ClearDoorMorePrompt()
+    {
+        var prompt = string.IsNullOrWhiteSpace(_currentDoorMorePrompt)
+            ? "-- More -- Space/Enter=next, B=back -- "
+            : _currentDoorMorePrompt;
+
+        var eraseLength = Math.Max(Math.Max(prompt.Length, _doorMorePromptEraseLength), 1);
+        WriteSerialText("\r" + new string(' ', eraseLength) + "\r");
+        _doorMorePromptEraseLength = 0;
     }
 
     private static (string Host, int Port)? ParseDialString(string dialString, int defaultPort)
@@ -1922,6 +2575,27 @@ public sealed class ModemBridge : IDisposable
 
         lock (_sync)
         {
+            try { _doorCts?.Cancel(); } catch { }
+            try { _doorInput?.Dispose(); } catch { }
+            try
+            {
+                if (_doorProcess is { HasExited: false })
+                {
+                    _doorProcess.CloseMainWindow();
+                    if (!_doorProcess.WaitForExit(750))
+                        _doorProcess.Kill(true);
+                }
+            }
+            catch { }
+            try { _doorProcess?.Dispose(); } catch { }
+            try { _doorCts?.Dispose(); } catch { }
+            _doorInput = null;
+            _doorSawCarriageReturn = false;
+            _doorNextInputLooksSingleKeyPrompt = false;
+            _doorRecentOutput.Clear();
+            _doorProcess = null;
+            _doorCts = null;
+
             try { _networkCts?.Cancel(); } catch { }
             try { _networkStream?.Dispose(); } catch { }
             try { _tcpClient?.Close(); } catch { }
@@ -2017,8 +2691,10 @@ internal enum LocalBbsMenuMode
     Main,
     Directory,
     Favorites,
+    DoorGames,
     SearchDirectory,
     SearchFavorites,
+    SearchDoorGames,
     Guide,
     SearchGuide,
     GuideDetails,

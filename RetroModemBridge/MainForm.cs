@@ -26,6 +26,7 @@ public sealed class MainForm : Form
     private readonly Button _saveLogButton = new();
     private readonly Button _saveDirectoryButton = new();
     private readonly Button _addDirectoryButton = new();
+    private readonly Button _addDoorGameButton = new();
     private readonly Button _deleteDirectoryButton = new();
     private readonly Button _editDirectoryButton = new();
     private readonly Button _copyDialCommandButton = new();
@@ -53,11 +54,14 @@ public sealed class MainForm : Form
     private readonly Label _lastCommandLabel = new();
     private readonly Label _currentConnectionLabel = new();
     private readonly ModemLightsPanel _lightsPanel = new();
+    private readonly TabControl _directoryTabs = new();
     private readonly DataGridView _directoryGrid = new();
+    private readonly DataGridView _doorGamesGrid = new();
     private readonly BindingList<BbsEntry> _directory = new();
     private readonly ModemBridge _bridge = new();
     private readonly AppSettings _settings;
     private readonly System.Windows.Forms.Timer _statusTimer = new();
+    private bool _applyingSettingsToUi;
 
     private static readonly int[] BaudRates =
     {
@@ -74,13 +78,14 @@ public sealed class MainForm : Form
         WireEvents();
         RefreshComPorts();
         ApplySettingsToUi();
+        ApplyDirectoryFilter();
         UpdateStatusDisplays();
     }
 
 
 private void InitializeComponent()
 {
-    Text = "RetroModem Bridge v3 Beta";
+    Text = "RetroModem Bridge v3.4";
     Icon = AppIconHelper.LoadAppIcon();
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(1180, 820);
@@ -600,7 +605,7 @@ private Control BuildDirectoryGroup()
     root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
     card.Controls.Add(root);
 
-    root.Controls.Add(CreateSectionTitle("BBS Directory / Dial Aliases"), 0, 0);
+    root.Controls.Add(CreateSectionTitle("Dial Directory"), 0, 0);
 
     var toolbar = new FlowLayoutPanel
     {
@@ -613,7 +618,8 @@ private Control BuildDirectoryGroup()
     };
 
     _importGuideButton.Text = "📄 Import Guide";
-    _addDirectoryButton.Text = "＋ Add";
+    _addDirectoryButton.Text = "＋ Add BBS";
+    _addDoorGameButton.Text = "🎮 Add Door";
     _editDirectoryButton.Text = "✎ Edit";
     _deleteDirectoryButton.Text = "🗑 Delete";
     _copyDialCommandButton.Text = "✆ Dial";
@@ -635,6 +641,7 @@ private Control BuildDirectoryGroup()
 
     StylePrimaryButton(_importGuideButton, Color.FromArgb(15, 104, 211), Color.FromArgb(12, 88, 178), 128, 34, 9.3F);
     StyleSecondaryButton(_addDirectoryButton, Color.White, Color.FromArgb(185, 190, 198), Color.FromArgb(45, 45, 45), 78, 34, 9.3F);
+    StyleSecondaryButton(_addDoorGameButton, Color.White, Color.FromArgb(185, 190, 198), Color.FromArgb(45, 45, 45), 112, 34, 9.3F);
     StyleSecondaryButton(_editDirectoryButton, Color.White, Color.FromArgb(185, 190, 198), Color.FromArgb(45, 45, 45), 78, 34, 9.3F);
     StyleSecondaryButton(_deleteDirectoryButton, Color.White, Color.FromArgb(185, 190, 198), Color.FromArgb(45, 45, 45), 92, 34, 9.3F);
     StyleSecondaryButton(_copyDialCommandButton, Color.White, Color.FromArgb(185, 190, 198), Color.FromArgb(45, 45, 45), 78, 34, 9.3F);
@@ -644,6 +651,7 @@ private Control BuildDirectoryGroup()
     StyleSecondaryButton(_moreDirectoryButton, Color.White, Color.FromArgb(185, 190, 198), Color.FromArgb(45, 45, 45), 82, 34, 9.3F);
 
     var moreMenu = new ContextMenuStrip();
+    moreMenu.Items.Add("Add Local Door Game", null, (_, _) => _addDoorGameButton.PerformClick());
     moreMenu.Items.Add("Copy Dial Command", null, (_, _) => _copyDialCommandButton.PerformClick());
     moreMenu.Items.Add("Dial History", null, (_, _) => _historyButton.PerformClick());
     moreMenu.Items.Add("Test All Favorites", null, (_, _) => _testFavoritesButton.PerformClick());
@@ -660,13 +668,14 @@ private Control BuildDirectoryGroup()
     moreMenu.Items.Add("Export Support Bundle", null, (_, _) => _supportBundleButton.PerformClick());
     _moreDirectoryButton.Click += (_, _) => moreMenu.Show(_moreDirectoryButton, new Point(0, _moreDirectoryButton.Height));
 
-    foreach (var button in new[] { _importGuideButton, _sessionMirrorButton, _addDirectoryButton, _editDirectoryButton, _deleteDirectoryButton, _favoriteButton, _testConnectionButton, _moreDirectoryButton })
+    foreach (var button in new[] { _importGuideButton, _sessionMirrorButton, _addDirectoryButton, _addDoorGameButton, _editDirectoryButton, _deleteDirectoryButton, _favoriteButton, _testConnectionButton, _moreDirectoryButton })
     {
         button.Margin = new Padding(0, 0, 6, 0);
         toolbar.Controls.Add(button);
     }
 
     _toolTips.SetToolTip(_importGuideButton, "Import the bundled Telnet BBS Guide list into your BBS directory.");
+    _toolTips.SetToolTip(_addDoorGameButton, "Add a local BBS door game. Example: dial ATDT USURPER from the CoCo.");
     _toolTips.SetToolTip(_sessionMirrorButton, "Open a live mirror of what the retro computer sees. You can optionally type into the active session.");
     _toolTips.SetToolTip(_moreDirectoryButton, "More directory tools, including import/export, setup, history, and the built-in terminal.");
 
@@ -716,54 +725,25 @@ private Control BuildDirectoryGroup()
     root.Controls.Add(filterPanel, 0, 2);
 
 
-    _directoryGrid.Dock = DockStyle.Fill;
-    _directoryGrid.AutoGenerateColumns = false;
-    _directoryGrid.AllowUserToAddRows = false;
-    _directoryGrid.AllowUserToDeleteRows = false;
-    _directoryGrid.AllowUserToResizeRows = false;
-    _directoryGrid.AllowUserToResizeColumns = true;
-    _directoryGrid.MultiSelect = false;
-    _directoryGrid.RowHeadersVisible = false;
-    _directoryGrid.EnableHeadersVisualStyles = false;
-    _directoryGrid.BackgroundColor = Color.White;
-    _directoryGrid.BorderStyle = BorderStyle.FixedSingle;
-    _directoryGrid.GridColor = Color.FromArgb(228, 232, 238);
-    _directoryGrid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
-    _directoryGrid.AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.None;
-    _directoryGrid.RowTemplate.Height = 36;
-    _directoryGrid.ColumnHeadersHeight = 34;
-    _directoryGrid.ColumnHeadersDefaultCellStyle.BackColor = Color.White;
-    _directoryGrid.ColumnHeadersDefaultCellStyle.ForeColor = Color.FromArgb(45, 45, 45);
-    _directoryGrid.ColumnHeadersDefaultCellStyle.Font = new Font("Segoe UI", 9.5F, FontStyle.Bold);
-    _directoryGrid.DefaultCellStyle.Font = new Font("Segoe UI", 9.5F, FontStyle.Regular);
-    _directoryGrid.DefaultCellStyle.SelectionBackColor = Color.FromArgb(244, 247, 252);
-    _directoryGrid.DefaultCellStyle.SelectionForeColor = Color.FromArgb(45, 45, 45);
-    _directoryGrid.DefaultCellStyle.BackColor = Color.White;
-    _directoryGrid.DefaultCellStyle.ForeColor = Color.FromArgb(56, 56, 56);
-    _directoryGrid.AlternatingRowsDefaultCellStyle.BackColor = Color.FromArgb(252, 252, 253);
-    _directoryGrid.DataSource = _directory;
-    if (_directoryGrid.Columns.Count == 0)
-    {
-        _directoryGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "", Width = 36, ReadOnly = true, SortMode = DataGridViewColumnSortMode.NotSortable });
-        _directoryGrid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(BbsEntry.Alias), HeaderText = "Alias", Width = 80 });
-        _directoryGrid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(BbsEntry.Name), HeaderText = "Name", Width = 160 });
-        _directoryGrid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(BbsEntry.Host), HeaderText = "Host", Width = 210 });
-        _directoryGrid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(BbsEntry.Port), HeaderText = "Port", Width = 65 });
-        _directoryGrid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(BbsEntry.Category), HeaderText = "Category", Width = 120 });
-        _directoryGrid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(BbsEntry.SystemType), HeaderText = "System", Width = 100 });
-        _directoryGrid.Columns.Add(new DataGridViewCheckBoxColumn { DataPropertyName = nameof(BbsEntry.SupportsAnsi), HeaderText = "ANSI", Width = 55 });
-        _directoryGrid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(BbsEntry.LastResult), HeaderText = "Status", Width = 110, ReadOnly = true });
-        _directoryGrid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(BbsEntry.LastChecked), HeaderText = "Last checked", Width = 140, ReadOnly = true });
-        _directoryGrid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(BbsEntry.LastResponseMs), HeaderText = "ms", Width = 65, ReadOnly = true });
-        _directoryGrid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(BbsEntry.Notes), HeaderText = "Notes", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill });
-    }
-    _directoryGrid.CellFormatting -= DirectoryGridOnCellFormatting;
-    _directoryGrid.CellFormatting += DirectoryGridOnCellFormatting;
-    root.Controls.Add(_directoryGrid, 0, 3);
+    ConfigureDirectoryGrid(_directoryGrid, doorGameGrid: false);
+    ConfigureDirectoryGrid(_doorGamesGrid, doorGameGrid: true);
+
+    var bbsPage = new TabPage("BBS Directory") { BackColor = Color.White, Padding = new Padding(0) };
+    var doorPage = new TabPage("Door Games") { BackColor = Color.White, Padding = new Padding(0) };
+    bbsPage.Controls.Add(_directoryGrid);
+    doorPage.Controls.Add(_doorGamesGrid);
+
+    _directoryTabs.Dock = DockStyle.Fill;
+    _directoryTabs.Margin = new Padding(0);
+    _directoryTabs.TabPages.Clear();
+    _directoryTabs.TabPages.Add(bbsPage);
+    _directoryTabs.TabPages.Add(doorPage);
+    _directoryTabs.SelectedIndexChanged += (_, _) => ApplyDirectoryFilter();
+    root.Controls.Add(_directoryTabs, 0, 3);
 
     var tip = new Label
     {
-        Text = "💡  Tip: Use the BBS Directory to save aliases, then dial from the vintage computer with ATDT1, ATDT coco, ATDT HELP, or ATDT FAVORITES.",
+        Text = "💡  Tip: BBS Directory and Door Games now have separate tabs. Dial either type from the vintage computer, like ATDT coco or ATDT USURPER.",
         AutoSize = true,
         Font = new Font("Segoe UI", 10F, FontStyle.Regular),
         ForeColor = Color.FromArgb(108, 108, 108),
@@ -773,6 +753,81 @@ private Control BuildDirectoryGroup()
     root.Controls.Add(tip, 0, 4);
 
     return card;
+}
+
+
+private void ConfigureDirectoryGrid(DataGridView grid, bool doorGameGrid)
+{
+    grid.Dock = DockStyle.Fill;
+    grid.AutoGenerateColumns = false;
+    grid.AllowUserToAddRows = false;
+    grid.AllowUserToDeleteRows = false;
+    grid.AllowUserToResizeRows = false;
+    grid.AllowUserToResizeColumns = true;
+    grid.MultiSelect = false;
+    grid.RowHeadersVisible = false;
+    grid.EnableHeadersVisualStyles = false;
+    grid.BackgroundColor = Color.White;
+    grid.BorderStyle = BorderStyle.FixedSingle;
+    grid.GridColor = Color.FromArgb(228, 232, 238);
+    grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+    grid.AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.None;
+    grid.RowTemplate.Height = 36;
+    grid.ColumnHeadersHeight = 34;
+    grid.ColumnHeadersDefaultCellStyle.BackColor = Color.White;
+    grid.ColumnHeadersDefaultCellStyle.ForeColor = Color.FromArgb(45, 45, 45);
+    grid.ColumnHeadersDefaultCellStyle.Font = new Font("Segoe UI", 9.5F, FontStyle.Bold);
+    grid.DefaultCellStyle.Font = new Font("Segoe UI", 9.5F, FontStyle.Regular);
+    grid.DefaultCellStyle.SelectionBackColor = Color.FromArgb(244, 247, 252);
+    grid.DefaultCellStyle.SelectionForeColor = Color.FromArgb(45, 45, 45);
+    grid.DefaultCellStyle.BackColor = Color.White;
+    grid.DefaultCellStyle.ForeColor = Color.FromArgb(56, 56, 56);
+    grid.AlternatingRowsDefaultCellStyle.BackColor = Color.FromArgb(252, 252, 253);
+    grid.DataSource = _directory;
+
+    if (grid.Columns.Count == 0)
+    {
+        grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "", Width = 36, ReadOnly = true, SortMode = DataGridViewColumnSortMode.NotSortable });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(BbsEntry.Alias), HeaderText = "Alias", Width = 80 });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(BbsEntry.Name), HeaderText = "Name", Width = 170 });
+
+        if (doorGameGrid)
+        {
+            grid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(BbsEntry.DoorExecutablePath), HeaderText = "Door EXE", Width = 260 });
+            grid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(BbsEntry.DoorArguments), HeaderText = "Arguments", Width = 220 });
+            grid.Columns.Add(new DataGridViewCheckBoxColumn { DataPropertyName = nameof(BbsEntry.DoorAutoEnterSingleKeys), HeaderText = "Auto Enter", Width = 90 });
+            grid.Columns.Add(new DataGridViewCheckBoxColumn { DataPropertyName = nameof(BbsEntry.DoorPauseLongOutput), HeaderText = "More", Width = 60 });
+            grid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(BbsEntry.DoorLinesPerPage), HeaderText = "Lines", Width = 60 });
+            grid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(BbsEntry.LastResult), HeaderText = "Status", Width = 110, ReadOnly = true });
+            grid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(BbsEntry.Notes), HeaderText = "Notes", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill });
+        }
+        else
+        {
+            grid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(BbsEntry.Host), HeaderText = "Host", Width = 210 });
+            grid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(BbsEntry.Port), HeaderText = "Port", Width = 65 });
+            grid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(BbsEntry.Category), HeaderText = "Category", Width = 120 });
+            grid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(BbsEntry.SystemType), HeaderText = "System", Width = 100 });
+            grid.Columns.Add(new DataGridViewCheckBoxColumn { DataPropertyName = nameof(BbsEntry.SupportsAnsi), HeaderText = "ANSI", Width = 55 });
+            grid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(BbsEntry.LastResult), HeaderText = "Status", Width = 110, ReadOnly = true });
+            grid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(BbsEntry.LastChecked), HeaderText = "Last checked", Width = 140, ReadOnly = true });
+            grid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(BbsEntry.LastResponseMs), HeaderText = "ms", Width = 65, ReadOnly = true });
+            grid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(BbsEntry.Notes), HeaderText = "Notes", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill });
+        }
+    }
+
+    grid.CellFormatting -= DirectoryGridOnCellFormatting;
+    grid.CellFormatting += DirectoryGridOnCellFormatting;
+}
+
+private DataGridView ActiveDirectoryGrid => _directoryTabs.SelectedTab?.Text == "Door Games" ? _doorGamesGrid : _directoryGrid;
+
+private IEnumerable<DataGridView> DirectoryGrids
+{
+    get
+    {
+        yield return _directoryGrid;
+        yield return _doorGamesGrid;
+    }
 }
 
 
@@ -922,7 +977,8 @@ private static Control CreateFieldPanel(string labelText, Control field, Control
         _clearLogButton.Click += (_, _) => _logBox.Clear();
         _copyLogButton.Click += (_, _) => CopyLog();
         _saveLogButton.Click += (_, _) => SaveLog();
-        _addDirectoryButton.Click += (_, _) => _directory.Add(new BbsEntry { Alias = NextAlias(), Name = "New BBS", Host = "example.com", Port = 23 });
+        _addDirectoryButton.Click += (_, _) => { _directory.Add(new BbsEntry { Alias = NextAlias(), Name = "New BBS", Host = "example.com", Port = 23, EntryType = "Telnet" }); ApplyDirectoryFilter(); };
+        _addDoorGameButton.Click += (_, _) => ShowAddDoorGameDialog();
         _deleteDirectoryButton.Click += (_, _) => DeleteSelectedDirectoryRows();
         _editDirectoryButton.Click += (_, _) => EditSelectedDirectoryCell();
         _saveDirectoryButton.Click += (_, _) => { SaveSettingsFromUi(); AddLog("Directory saved."); };
@@ -983,22 +1039,30 @@ private static Control CreateFieldPanel(string labelText, Control field, Control
 
     private void ApplySettingsToUi()
     {
-        SelectPort(_settings.ComPort);
+        _applyingSettingsToUi = true;
+        try
+        {
+            SelectPort(_settings.ComPort);
 
-        var baudText = _settings.BaudRate.ToString();
-        _baudCombo.SelectedItem = _baudCombo.Items.Contains(baudText) ? baudText : "19200";
-        _defaultPortText.Text = _settings.DefaultTcpPort.ToString();
-        _dtrCheck.Checked = _settings.DtrEnable;
-        _rtsCheck.Checked = _settings.RtsEnable;
-        _echoCheck.Checked = _settings.EchoEnabled;
-        _telnetFilterCheck.Checked = _settings.TelnetFilteringEnabled;
-        _rememberComPortCheck.Checked = _settings.RememberComPort;
-        _startupSoundCheck.Checked = _settings.PlayStartupSound;
+            var baudText = _settings.BaudRate.ToString();
+            _baudCombo.SelectedItem = _baudCombo.Items.Contains(baudText) ? baudText : "19200";
+            _defaultPortText.Text = _settings.DefaultTcpPort.ToString();
+            _dtrCheck.Checked = _settings.DtrEnable;
+            _rtsCheck.Checked = _settings.RtsEnable;
+            _echoCheck.Checked = _settings.EchoEnabled;
+            _telnetFilterCheck.Checked = _settings.TelnetFilteringEnabled;
+            _rememberComPortCheck.Checked = _settings.RememberComPort;
+            _startupSoundCheck.Checked = _settings.PlayStartupSound;
+        }
+        finally
+        {
+            _applyingSettingsToUi = false;
+        }
     }
 
     private void SaveSettingsFromUi()
     {
-        _directoryGrid.EndEdit();
+        foreach (var grid in DirectoryGrids) grid.EndEdit();
         _settings.ComPort = _rememberComPortCheck.Checked ? GetSelectedPortName() : null;
         _settings.RememberComPort = _rememberComPortCheck.Checked;
         _settings.BaudRate = int.TryParse(_baudCombo.SelectedItem?.ToString(), out var baud) ? baud : 19200;
@@ -1033,12 +1097,20 @@ private static Control CreateFieldPanel(string labelText, Control field, Control
 
     private void SaveStartupSoundPreference()
     {
+        if (_applyingSettingsToUi)
+            return;
+
         _settings.PlayStartupSound = _startupSoundCheck.Checked;
 
         try
         {
             _settings.Save();
             AddLog("Startup sound preference saved: " + (_settings.PlayStartupSound ? "enabled" : "disabled"));
+
+            // Give the checkbox immediate feedback: when someone turns the
+            // startup sound on, play it once right away.  Turning it off stays quiet.
+            if (_settings.PlayStartupSound)
+                PlayStartupSoundIfEnabled();
         }
         catch (Exception ex)
         {
@@ -1083,13 +1155,14 @@ private static Control CreateFieldPanel(string labelText, Control field, Control
     private List<BbsEntry> GetCleanDirectory()
     {
         return _directory
-            .Where(e => !string.IsNullOrWhiteSpace(e.Alias) && !string.IsNullOrWhiteSpace(e.Host))
+            .Where(e => !string.IsNullOrWhiteSpace(e.Alias) && (!string.IsNullOrWhiteSpace(e.Host) || e.IsDoorGame))
             .Select(e => new BbsEntry
             {
                 Alias = e.Alias.Trim(),
                 Name = e.Name.Trim(),
-                Host = e.Host.Trim(),
-                Port = e.Port < 1 || e.Port > 65535 ? 23 : e.Port,
+                Host = e.IsDoorGame && string.IsNullOrWhiteSpace(e.Host) ? "local-door" : e.Host.Trim(),
+                Port = e.IsDoorGame ? 0 : (e.Port < 1 || e.Port > 65535 ? 23 : e.Port),
+                EntryType = e.IsDoorGame ? "Door" : (string.IsNullOrWhiteSpace(e.EntryType) ? "Telnet" : e.EntryType.Trim()),
                 Category = e.Category.Trim(),
                 SystemType = e.SystemType.Trim(),
                 SupportsAnsi = e.SupportsAnsi,
@@ -1098,7 +1171,18 @@ private static Control CreateFieldPanel(string labelText, Control field, Control
                 LastResult = e.LastResult.Trim(),
                 LastChecked = e.LastChecked,
                 LastResponseMs = e.LastResponseMs,
-                Notes = e.Notes.Trim()
+                Notes = e.Notes.Trim(),
+                DoorExecutablePath = e.DoorExecutablePath.Trim(),
+                DoorWorkingDirectory = e.DoorWorkingDirectory.Trim(),
+                DoorArguments = e.DoorArguments.Trim(),
+                DoorDropFileType = string.IsNullOrWhiteSpace(e.DoorDropFileType) ? "DOOR32.SYS" : e.DoorDropFileType.Trim(),
+                DoorNodeNumber = e.DoorNodeNumber < 1 ? 1 : e.DoorNodeNumber,
+                DoorUserName = string.IsNullOrWhiteSpace(e.DoorUserName) ? "CoCo Caller" : e.DoorUserName.Trim(),
+                DoorAutoEnterSingleKeys = e.DoorAutoEnterSingleKeys,
+                DoorPauseLongOutput = e.DoorPauseLongOutput,
+                DoorLinesPerPage = e.DoorLinesPerPage < 5 ? 21 : e.DoorLinesPerPage,
+                DoorMorePrompt = string.IsNullOrWhiteSpace(e.DoorMorePrompt) ? "-- More -- Space/Enter=next, B=back -- " : e.DoorMorePrompt,
+                DoorMorePromptRow = e.DoorMorePromptRow < 1 ? 24 : e.DoorMorePromptRow
             })
             .ToList();
     }
@@ -1231,8 +1315,9 @@ private void ApplyBridgeButtonColors(bool running)
         _echoCheck.Enabled = !running;
         _telnetFilterCheck.Enabled = !running;
         _rememberComPortCheck.Enabled = !running;
-        _directoryGrid.ReadOnly = running;
+        foreach (var grid in DirectoryGrids) grid.ReadOnly = running;
         _addDirectoryButton.Enabled = !running;
+        _addDoorGameButton.Enabled = !running;
         _deleteDirectoryButton.Enabled = !running;
         _editDirectoryButton.Enabled = !running;
         _saveDirectoryButton.Enabled = !running;
@@ -1287,53 +1372,191 @@ private void ApplyBridgeButtonColors(bool running)
 
     private void ApplyDirectoryFilter()
     {
-        if (_directoryGrid.Rows.Count == 0)
-            return;
-
         try
         {
-            CurrencyManager? manager = null;
-            if (_directoryGrid.BindingContext[_directory] is CurrencyManager cm)
-            {
-                manager = cm;
-                manager.SuspendBinding();
-            }
-
             var search = _directorySearchText.Text.Trim();
             var filter = _directoryFilterCombo.SelectedItem?.ToString() ?? "All BBSes";
 
-            foreach (DataGridViewRow row in _directoryGrid.Rows)
+            foreach (var grid in DirectoryGrids)
             {
-                if (row.DataBoundItem is not BbsEntry entry)
-                    continue;
-
-                var matchesSearch = string.IsNullOrWhiteSpace(search) ||
-                    entry.Alias.Contains(search, StringComparison.OrdinalIgnoreCase) ||
-                    entry.Name.Contains(search, StringComparison.OrdinalIgnoreCase) ||
-                    entry.Host.Contains(search, StringComparison.OrdinalIgnoreCase) ||
-                    entry.Category.Contains(search, StringComparison.OrdinalIgnoreCase) ||
-                    entry.SystemType.Contains(search, StringComparison.OrdinalIgnoreCase) ||
-                    entry.Notes.Contains(search, StringComparison.OrdinalIgnoreCase);
-
-                var matchesFilter = filter switch
+                var showDoors = ReferenceEquals(grid, _doorGamesGrid);
+                CurrencyManager? manager = null;
+                if (grid.BindingContext[_directory] is CurrencyManager cm)
                 {
-                    "Favorites only" => entry.IsFavorite,
-                    "Online only" => entry.LastResult.Contains("Online", StringComparison.OrdinalIgnoreCase) || entry.LastResult.Contains("Connected", StringComparison.OrdinalIgnoreCase),
-                    "Failed recently" => !string.IsNullOrWhiteSpace(entry.LastResult) && !entry.LastResult.Contains("Online", StringComparison.OrdinalIgnoreCase) && !entry.LastResult.Contains("Connected", StringComparison.OrdinalIgnoreCase),
-                    "ANSI only" => entry.SupportsAnsi,
-                    "Recently dialed" => entry.LastDialed is not null,
-                    _ => true
-                };
+                    manager = cm;
+                    manager.SuspendBinding();
+                }
 
-                row.Visible = matchesSearch && matchesFilter;
+                foreach (DataGridViewRow row in grid.Rows)
+                {
+                    if (row.DataBoundItem is not BbsEntry entry)
+                        continue;
+
+                    var isCorrectTab = showDoors ? entry.IsDoorGame : !entry.IsDoorGame;
+                    var matchesSearch = string.IsNullOrWhiteSpace(search) ||
+                        entry.Alias.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                        entry.Name.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                        entry.Host.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                        entry.DoorExecutablePath.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                        entry.DoorArguments.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                        entry.Category.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                        entry.SystemType.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                        entry.Notes.Contains(search, StringComparison.OrdinalIgnoreCase);
+
+                    var matchesFilter = filter switch
+                    {
+                        "Favorites only" => entry.IsFavorite,
+                        "Online only" => entry.LastResult.Contains("Online", StringComparison.OrdinalIgnoreCase) || entry.LastResult.Contains("Connected", StringComparison.OrdinalIgnoreCase) || entry.LastResult.Contains("Door ready", StringComparison.OrdinalIgnoreCase),
+                        "Failed recently" => !string.IsNullOrWhiteSpace(entry.LastResult) && !entry.LastResult.Contains("Online", StringComparison.OrdinalIgnoreCase) && !entry.LastResult.Contains("Connected", StringComparison.OrdinalIgnoreCase) && !entry.LastResult.Contains("Door ready", StringComparison.OrdinalIgnoreCase),
+                        "ANSI only" => entry.SupportsAnsi,
+                        "Recently dialed" => entry.LastDialed is not null,
+                        _ => true
+                    };
+
+                    row.Visible = isCorrectTab && matchesSearch && matchesFilter;
+                }
+
+                manager?.ResumeBinding();
             }
-
-            manager?.ResumeBinding();
         }
         catch
         {
             // Filtering is a convenience feature. Do not let it interfere with bridge use.
         }
+    }
+
+
+    private void ShowAddDoorGameDialog() => ShowDoorGameDialog(null);
+
+    private void ShowDoorGameDialog(BbsEntry? existingEntry)
+    {
+        var editing = existingEntry is not null;
+        using var form = new Form
+        {
+            Text = editing ? "Edit Local Door Game" : "Add Local Door Game",
+            StartPosition = FormStartPosition.CenterParent,
+            Size = new Size(800, 620),
+            MinimumSize = new Size(760, 560),
+            Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point)
+        };
+
+        var root = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 3,
+            RowCount = 14,
+            Padding = new Padding(16)
+        };
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 155));
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        form.Controls.Add(root);
+
+        static Label L(string text) => new() { Text = text, AutoSize = true, TextAlign = ContentAlignment.MiddleLeft, Anchor = AnchorStyles.Left, Margin = new Padding(0, 8, 8, 0) };
+        TextBox aliasBox = new() { Text = existingEntry?.Alias ?? "USURPER", Dock = DockStyle.Fill };
+        TextBox nameBox = new() { Text = existingEntry?.Name ?? "Usurper Reborn", Dock = DockStyle.Fill };
+        TextBox exeBox = new() { Text = existingEntry?.DoorExecutablePath ?? string.Empty, Dock = DockStyle.Fill };
+        TextBox workBox = new() { Text = existingEntry?.DoorWorkingDirectory ?? string.Empty, Dock = DockStyle.Fill };
+        TextBox argsBox = new() { Text = string.IsNullOrWhiteSpace(existingEntry?.DoorArguments) ? "--door32 {door32} --stdio" : existingEntry!.DoorArguments, Dock = DockStyle.Fill, PlaceholderText = "Example: --door32 {door32} --stdio" };
+        NumericUpDown nodeBox = new() { Minimum = 1, Maximum = 99, Value = Math.Max(1, Math.Min(99, existingEntry?.DoorNodeNumber ?? 1)), Width = 80 };
+        TextBox userBox = new() { Text = string.IsNullOrWhiteSpace(existingEntry?.DoorUserName) ? "CoCo Caller" : existingEntry!.DoorUserName, Dock = DockStyle.Fill };
+        CheckBox autoEnterBox = new() { Text = "Auto-Enter after single keys", Checked = existingEntry?.DoorAutoEnterSingleKeys ?? true, AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, 8, 0, 0) };
+        CheckBox pagingBox = new() { Text = "Pause long output with More prompt", Checked = existingEntry?.DoorPauseLongOutput ?? true, AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, 8, 0, 0) };
+        NumericUpDown linesBox = new() { Minimum = 5, Maximum = 60, Value = Math.Max(5, Math.Min(60, existingEntry?.DoorLinesPerPage ?? 21)), Width = 80 };
+        TextBox morePromptBox = new() { Text = string.IsNullOrWhiteSpace(existingEntry?.DoorMorePrompt) ? "-- More -- Space/Enter=next, B=back -- " : existingEntry!.DoorMorePrompt, Dock = DockStyle.Fill };
+        NumericUpDown promptRowBox = new() { Minimum = 1, Maximum = 60, Value = Math.Max(1, Math.Min(60, existingEntry?.DoorMorePromptRow ?? 24)), Width = 80 };
+        TextBox notesBox = new() { Text = existingEntry?.Notes ?? "Local door game. Dial with ATDT USURPER.", Dock = DockStyle.Fill };
+
+        Button browseExe = new() { Text = "Browse...", AutoSize = true };
+        browseExe.Click += (_, _) =>
+        {
+            using var picker = new OpenFileDialog { Filter = "Executable files (*.exe)|*.exe|All files (*.*)|*.*", Title = "Select door game executable" };
+            if (picker.ShowDialog(form) == DialogResult.OK)
+            {
+                exeBox.Text = picker.FileName;
+                if (string.IsNullOrWhiteSpace(workBox.Text))
+                    workBox.Text = Path.GetDirectoryName(picker.FileName) ?? string.Empty;
+            }
+        };
+
+        Button browseWork = new() { Text = "Browse...", AutoSize = true };
+        browseWork.Click += (_, _) =>
+        {
+            using var picker = new FolderBrowserDialog { Description = "Select door game working folder" };
+            if (picker.ShowDialog(form) == DialogResult.OK)
+                workBox.Text = picker.SelectedPath;
+        };
+
+        root.Controls.Add(L("Alias"), 0, 0); root.Controls.Add(aliasBox, 1, 0);
+        root.Controls.Add(L("Display name"), 0, 1); root.Controls.Add(nameBox, 1, 1);
+        root.Controls.Add(L("Door EXE"), 0, 2); root.Controls.Add(exeBox, 1, 2); root.Controls.Add(browseExe, 2, 2);
+        root.Controls.Add(L("Working folder"), 0, 3); root.Controls.Add(workBox, 1, 3); root.Controls.Add(browseWork, 2, 3);
+        root.Controls.Add(L("Arguments"), 0, 4); root.Controls.Add(argsBox, 1, 4); root.SetColumnSpan(argsBox, 2);
+        root.Controls.Add(L("Node"), 0, 5); root.Controls.Add(nodeBox, 1, 5);
+        root.Controls.Add(L("Door user"), 0, 6); root.Controls.Add(userBox, 1, 6); root.SetColumnSpan(userBox, 2);
+        root.Controls.Add(L("Input assist"), 0, 7); root.Controls.Add(autoEnterBox, 1, 7); root.SetColumnSpan(autoEnterBox, 2);
+        root.Controls.Add(L("Output paging"), 0, 8); root.Controls.Add(pagingBox, 1, 8); root.SetColumnSpan(pagingBox, 2);
+        root.Controls.Add(L("Lines per page"), 0, 9); root.Controls.Add(linesBox, 1, 9);
+        root.Controls.Add(L("More prompt"), 0, 10); root.Controls.Add(morePromptBox, 1, 10); root.SetColumnSpan(morePromptBox, 2);
+        root.Controls.Add(L("Prompt row"), 0, 11); root.Controls.Add(promptRowBox, 1, 11);
+        root.Controls.Add(L("Notes"), 0, 12); root.Controls.Add(notesBox, 1, 12); root.SetColumnSpan(notesBox, 2);
+
+        var help = new Label
+        {
+            Text = "RetroModem Bridge creates DOOR32.SYS automatically. For Usurper Reborn, use: --door32 {door32} --stdio. Output paging pauses long text. Prompt row controls where the temporary More prompt appears. For a 24-line terminal, use row 24.",
+            AutoSize = true,
+            MaximumSize = new Size(690, 0),
+            ForeColor = Color.FromArgb(85, 85, 85),
+            Margin = new Padding(0, 12, 0, 8)
+        };
+        root.Controls.Add(help, 0, 13); root.SetColumnSpan(help, 3);
+
+        var buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, FlowDirection = FlowDirection.RightToLeft, AutoSize = true, Padding = new Padding(0, 0, 16, 16) };
+        var save = new Button { Text = editing ? "Save Changes" : "Save Door", DialogResult = DialogResult.OK, Width = 120 };
+        var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Width = 90 };
+        buttons.Controls.Add(save);
+        buttons.Controls.Add(cancel);
+        form.Controls.Add(buttons);
+        form.AcceptButton = save;
+        form.CancelButton = cancel;
+
+        if (form.ShowDialog(this) != DialogResult.OK)
+            return;
+
+        var alias = aliasBox.Text.Trim();
+        if (string.IsNullOrWhiteSpace(alias))
+            alias = NextAlias();
+
+        var target = existingEntry ?? new BbsEntry();
+        target.Alias = alias;
+        target.Name = string.IsNullOrWhiteSpace(nameBox.Text) ? alias : nameBox.Text.Trim();
+        target.Host = "local-door";
+        target.Port = 0;
+        target.EntryType = "Door";
+        target.Category = "Door Games";
+        target.SystemType = "Local Door";
+        target.SupportsAnsi = true;
+        target.IsFavorite = true;
+        target.DoorExecutablePath = exeBox.Text.Trim();
+        target.DoorWorkingDirectory = workBox.Text.Trim();
+        target.DoorArguments = argsBox.Text.Trim();
+        target.DoorDropFileType = "DOOR32.SYS";
+        target.DoorNodeNumber = (int)nodeBox.Value;
+        target.DoorUserName = string.IsNullOrWhiteSpace(userBox.Text) ? "CoCo Caller" : userBox.Text.Trim();
+        target.DoorAutoEnterSingleKeys = autoEnterBox.Checked;
+        target.DoorPauseLongOutput = pagingBox.Checked;
+        target.DoorLinesPerPage = (int)linesBox.Value;
+        target.DoorMorePrompt = string.IsNullOrWhiteSpace(morePromptBox.Text) ? "-- More -- Space/Enter=next, B=back -- " : morePromptBox.Text;
+        target.DoorMorePromptRow = (int)promptRowBox.Value;
+        target.Notes = notesBox.Text.Trim();
+
+        if (!editing)
+            _directory.Add(target);
+
+        foreach (var grid in DirectoryGrids) grid.Refresh();
+        ApplyDirectoryFilter();
+        SaveSettingsFromUi();
+        AddLog((editing ? "Updated" : "Added") + " local door game alias: ATDT " + alias);
     }
 
     private void ShowSessionMirror()
@@ -1344,9 +1567,15 @@ private void ApplyBridgeButtonColors(bool running)
 
     private void OpenSelectedInTerminal()
     {
-        if (_directoryGrid.CurrentRow?.DataBoundItem is not BbsEntry entry || string.IsNullOrWhiteSpace(entry.Host))
+        if (ActiveDirectoryGrid.CurrentRow?.DataBoundItem is not BbsEntry entry || string.IsNullOrWhiteSpace(entry.Host))
         {
-            MessageBox.Show(this, "Select a BBS entry first.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(this, "Select a directory entry first.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        if (entry.IsDoorGame)
+        {
+            MessageBox.Show(this, "Local door games launch from your retro computer with ATDT " + entry.Alias + ". The built-in terminal is for telnet BBS entries only.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
 
@@ -1359,23 +1588,34 @@ private void ApplyBridgeButtonColors(bool running)
 
     private void ToggleFavorite()
     {
-        if (_directoryGrid.CurrentRow?.DataBoundItem is not BbsEntry entry)
+        if (ActiveDirectoryGrid.CurrentRow?.DataBoundItem is not BbsEntry entry)
         {
-            MessageBox.Show(this, "Select a BBS entry first.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(this, "Select a directory entry first.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
 
         entry.IsFavorite = !entry.IsFavorite;
-        _directoryGrid.Refresh();
+        foreach (var grid in DirectoryGrids) grid.Refresh();
         SaveSettingsFromUi();
         AddLog((entry.IsFavorite ? "Added favorite: " : "Removed favorite: ") + entry.DisplayName);
     }
 
     private async Task TestSelectedConnectionAsync()
     {
-        if (_directoryGrid.CurrentRow?.DataBoundItem is not BbsEntry entry || string.IsNullOrWhiteSpace(entry.Host))
+        if (ActiveDirectoryGrid.CurrentRow?.DataBoundItem is not BbsEntry entry || string.IsNullOrWhiteSpace(entry.Host))
         {
-            MessageBox.Show(this, "Select a BBS entry first.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(this, "Select a directory entry first.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        if (entry.IsDoorGame)
+        {
+            var ok = !string.IsNullOrWhiteSpace(entry.DoorExecutablePath) && File.Exists(entry.DoorExecutablePath);
+            entry.LastChecked = DateTime.Now;
+            entry.LastResult = ok ? "Door ready" : "Door EXE missing";
+            foreach (var grid in DirectoryGrids) grid.Refresh();
+            SaveSettingsFromUi();
+            MessageBox.Show(this, ok ? "Door executable found. Dial it from the retro computer with ATDT " + entry.Alias + "." : "Door executable is missing. Edit the Door EXE path for this entry.", "Door game test", MessageBoxButtons.OK, ok ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
             return;
         }
 
@@ -1394,7 +1634,7 @@ private void ApplyBridgeButtonColors(bool running)
             entry.LastResult = result.Result;
             entry.LastChecked = result.CheckedAt;
             entry.LastResponseMs = result.ResponseMs;
-            _directoryGrid.Refresh();
+            foreach (var grid in DirectoryGrids) grid.Refresh();
             ApplyDirectoryFilter();
             SaveSettingsFromUi();
 
@@ -1412,7 +1652,7 @@ private void ApplyBridgeButtonColors(bool running)
 
     private async Task TestAllFavoritesAsync()
     {
-        var favorites = _directory.Where(e => e.IsFavorite && !string.IsNullOrWhiteSpace(e.Host)).ToList();
+        var favorites = _directory.Where(e => e.IsFavorite && !e.IsDoorGame && !string.IsNullOrWhiteSpace(e.Host)).ToList();
         if (favorites.Count == 0)
         {
             MessageBox.Show(this, "No favorites to test yet. Mark some BBSes as favorites first.", "Test favorites", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -1502,7 +1742,7 @@ private void ApplyBridgeButtonColors(bool running)
 
         try
         {
-             _directoryGrid.Refresh();
+             foreach (var grid in DirectoryGrids) grid.Refresh();
             _settings.DialDirectory = GetCleanDirectory();
             _settings.Save();
         }
@@ -1536,7 +1776,7 @@ private void ApplyBridgeButtonColors(bool running)
     private void SelectRandomFavorite()
     {
         var candidates = _directory
-            .Where(e => e.IsFavorite && !string.IsNullOrWhiteSpace(e.Host))
+            .Where(e => e.IsFavorite && !e.IsDoorGame && !string.IsNullOrWhiteSpace(e.Host))
             .ToList();
 
         if (candidates.Count == 0)
@@ -1698,7 +1938,7 @@ private void ApplyBridgeButtonColors(bool running)
             var info = new
             {
                 App = "RetroModem Bridge",
-                Version = "v3.0-beta.3",
+                Version = "v3.4",
                 GeneratedAt = DateTime.Now,
                 OS = Environment.OSVersion.ToString(),
                 Is64BitOS = Environment.Is64BitOperatingSystem,
@@ -1746,16 +1986,16 @@ private void ApplyBridgeButtonColors(bool running)
 
     private void CopyDialCommand()
     {
-        if (_directoryGrid.CurrentRow?.DataBoundItem is not BbsEntry entry || string.IsNullOrWhiteSpace(entry.Alias))
+        if (ActiveDirectoryGrid.CurrentRow?.DataBoundItem is not BbsEntry entry || string.IsNullOrWhiteSpace(entry.Alias))
         {
-            MessageBox.Show(this, "Select a BBS entry with an alias first.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(this, "Select a directory entry with an alias first.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
 
         var command = "ATDT" + entry.Alias.Trim();
         Clipboard.SetText(command);
         AddLog("Copied dial command: " + command);
-        MessageBox.Show(this, command + " copied. Type this on the vintage computer terminal to dial this saved BBS.", "Dial command copied", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        MessageBox.Show(this, command + " copied. Type this on the vintage computer terminal to dial this saved entry.", "Dial command copied", MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
     private void CopyLog()
@@ -1769,7 +2009,7 @@ private void ApplyBridgeButtonColors(bool running)
         using var dialog = new SaveFileDialog
         {
             Filter = "Text files (*.txt)|*.txt|Log files (*.log)|*.log|All files (*.*)|*.*",
-            FileName = "RetroModemBridge-v3-beta-log.txt"
+            FileName = "RetroModemBridge-v3.4-log.txt"
         };
 
         if (dialog.ShowDialog(this) == DialogResult.OK)
@@ -1778,16 +2018,22 @@ private void ApplyBridgeButtonColors(bool running)
 
     private void EditSelectedDirectoryCell()
     {
-        if (_directoryGrid.CurrentCell is null)
+        if (ActiveDirectoryGrid.CurrentRow?.DataBoundItem is BbsEntry entry && entry.IsDoorGame)
+        {
+            ShowDoorGameDialog(entry);
+            return;
+        }
+
+        if (ActiveDirectoryGrid.CurrentCell is null)
             return;
 
-        _directoryGrid.Focus();
-        _directoryGrid.BeginEdit(true);
+        ActiveDirectoryGrid.Focus();
+        ActiveDirectoryGrid.BeginEdit(true);
     }
 
     private void DeleteSelectedDirectoryRows()
     {
-        var entries = _directoryGrid.SelectedRows
+        var entries = ActiveDirectoryGrid.SelectedRows
             .Cast<DataGridViewRow>()
             .Select(row => row.DataBoundItem as BbsEntry)
             .Where(entry => entry is not null)
@@ -1795,15 +2041,15 @@ private void ApplyBridgeButtonColors(bool running)
             .Distinct()
             .ToList();
 
-        if (entries.Count == 0 && _directoryGrid.CurrentRow?.DataBoundItem is BbsEntry currentEntry)
+        if (entries.Count == 0 && ActiveDirectoryGrid.CurrentRow?.DataBoundItem is BbsEntry currentEntry)
             entries.Add(currentEntry);
 
         if (entries.Count == 0)
             return;
 
         var label = entries.Count == 1
-            ? $"Delete '{entries[0].Name}' from your BBS Directory?"
-            : $"Delete {entries.Count} selected BBS entries from your BBS Directory?";
+            ? $"Delete '{entries[0].Name}' from your directory?"
+            : $"Delete {entries.Count} selected entries from your directory?";
 
         var result = MessageBox.Show(
             this,
@@ -1820,7 +2066,8 @@ private void ApplyBridgeButtonColors(bool running)
             _directory.Remove(entry);
 
         SaveSettingsFromUi();
-        AddLog(entries.Count == 1 ? "Deleted BBS directory entry." : $"Deleted {entries.Count} BBS directory entries.");
+        ApplyDirectoryFilter();
+        AddLog(entries.Count == 1 ? "Deleted directory entry." : $"Deleted {entries.Count} directory entries.");
     }
 
     private async Task UpdateBbsGuideFromAppAsync()
@@ -2061,7 +2308,7 @@ private void ApplyBridgeButtonColors(bool running)
         using var dialog = new SaveFileDialog
         {
             Filter = "JSON files (*.json)|*.json|All files (*.*)|*.*",
-            FileName = "bbs-list-v3-beta.json"
+            FileName = "bbs-list-v3.4.json"
         };
 
         if (dialog.ShowDialog(this) != DialogResult.OK)
@@ -2242,7 +2489,7 @@ private void DirectoryGridOnCellFormatting(object? sender, DataGridViewCellForma
     if (e.RowIndex < 0 || e.ColumnIndex != 0)
         return;
 
-    if (_directoryGrid.Rows[e.RowIndex].DataBoundItem is BbsEntry entry)
+    if (sender is DataGridView grid && e.RowIndex >= 0 && e.RowIndex < grid.Rows.Count && grid.Rows[e.RowIndex].DataBoundItem is BbsEntry entry)
         e.Value = entry.IsFavorite ? "★" : "☆";
     else
         e.Value = "☆";

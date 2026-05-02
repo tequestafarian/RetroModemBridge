@@ -5,7 +5,10 @@
     <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <AssemblyName>RetroModemBridge-v3-beta</AssemblyName>
+    <AssemblyName>RetroModemBridge-v3.4</AssemblyName>
+    <Version>3.4.0</Version>
+    <FileVersion>3.4.0.0</FileVersion>
+    <AssemblyVersion>3.4.0.0</AssemblyVersion>
     <RootNamespace>RetroModemBridge</RootNamespace>
     <ApplicationIcon>Assets\retromodem-bridge.ico</ApplicationIcon>
   </PropertyGroup>
