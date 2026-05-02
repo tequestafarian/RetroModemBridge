@@ -15,6 +15,11 @@ public sealed class ModemBridge : IDisposable
     private bool _localBbsSessionActive;
     private LocalBbsMenuMode _localBbsMenuMode = LocalBbsMenuMode.Main;
     private List<BbsEntry> _localBbsCurrentList = new();
+    private List<BbsGuideEntry> _localGuideCurrentList = new();
+    private BbsGuideEntry? _localGuideSelectedEntry;
+    private int _localBbsPage;
+    private string _localBbsSearchText = string.Empty;
+    private const int LocalBbsPageSize = 15;
     private bool _disposed;
     private string? _lastDialString;
     private long _serialRxBytes;
@@ -420,7 +425,7 @@ public sealed class ModemBridge : IDisposable
     private bool TryHandleTextService(string dialString, DateTime started)
     {
         var key = dialString.Trim().ToUpperInvariant();
-        if (key != "TIME" && key != "HELP" && key != "MENU" && key != "BBSLIST" && key != "FAVORITES")
+        if (key != "TIME" && key != "HELP" && key != "MENU" && key != "BBSLIST" && key != "FAVORITES" && key != "NEWS" && key != "FEATURED" && key != "RANDOM" && key != "ONLINE" && key != "GUIDE" && key != "IMPORT" && key != "UPDATEGUIDE" && key != "UPDATE")
             return false;
 
         LogMessage("Text service requested: " + key);
@@ -430,6 +435,22 @@ public sealed class ModemBridge : IDisposable
             StartLocalBbsSession();
             RecordHistory(dialString, key, 0, "Local BBS menu", started);
             SetStatus("Local BBS menu active.");
+            return true;
+        }
+
+        if (key is "GUIDE" or "IMPORT")
+        {
+            StartLocalGuideSession();
+            RecordHistory(dialString, key, 0, "Local guide browser", started);
+            SetStatus("Local BBS Guide browser active.");
+            return true;
+        }
+
+        if (key is "UPDATEGUIDE" or "UPDATE")
+        {
+            StartLocalGuideUpdateSession();
+            RecordHistory(dialString, key, 0, "Local guide update", started);
+            SetStatus("Local BBS Guide update active.");
             return true;
         }
 
@@ -447,6 +468,10 @@ public sealed class ModemBridge : IDisposable
             "HELP" => BuildAnsiHelpScreen(includeMenuPrompt: false),
             "BBSLIST" => BuildAnsiBbsListScreen(DialDirectory, "BBS DIRECTORY", includeDialPrompt: false),
             "FAVORITES" => BuildAnsiBbsListScreen(DialDirectory.Where(e => e.IsFavorite), "FAVORITES", includeDialPrompt: false),
+            "ONLINE" => BuildAnsiBbsListScreen(DialDirectory.Where(e => e.LastResult.Contains("Online", StringComparison.OrdinalIgnoreCase) || e.LastResult.Contains("Connected", StringComparison.OrdinalIgnoreCase)), "RECENTLY ONLINE", includeDialPrompt: false),
+            "FEATURED" => BuildAnsiFeaturedScreen(),
+            "RANDOM" => BuildAnsiRandomScreen(),
+            "NEWS" => BuildAnsiNewsScreen(),
             _ => "\r\nERROR\r\n"
         };
     }
@@ -457,15 +482,71 @@ public sealed class ModemBridge : IDisposable
         _localBbsSessionActive = true;
         _localBbsMenuMode = LocalBbsMenuMode.Main;
         _localBbsCurrentList = new List<BbsEntry>();
+        _localGuideCurrentList = new List<BbsGuideEntry>();
+        _localGuideSelectedEntry = null;
 
         WriteSerialText("\r\nCONNECT\r\n");
         WriteSerialText(BuildAnsiMainMenuScreen(firstConnect: true));
+    }
+
+    private void StartLocalGuideSession()
+    {
+        HangUp("Starting local BBS Guide browser", silent: true);
+        _localBbsSessionActive = true;
+        _localBbsMenuMode = LocalBbsMenuMode.Guide;
+        _localBbsCurrentList = new List<BbsEntry>();
+        _localGuideSelectedEntry = null;
+        _localBbsSearchText = string.Empty;
+        _localBbsPage = 0;
+        RefreshLocalGuideCurrentList();
+
+        WriteSerialText("\r\nCONNECT\r\n");
+        WriteSerialText(BuildAnsiGuideListScreen());
+    }
+
+    private void StartLocalGuideUpdateSession()
+    {
+        HangUp("Starting local BBS Guide update", silent: true);
+        _localBbsSessionActive = true;
+        _localBbsMenuMode = LocalBbsMenuMode.UpdateGuide;
+        _localBbsCurrentList = new List<BbsEntry>();
+        _localGuideCurrentList = new List<BbsGuideEntry>();
+        _localGuideSelectedEntry = null;
+        _localBbsSearchText = string.Empty;
+        _localBbsPage = 0;
+
+        WriteSerialText("\r\nCONNECT\r\n");
+        WriteSerialText(BuildAnsiGuideUpdateMenuScreen());
     }
 
     private async Task HandleLocalBbsInputAsync(string input)
     {
         var choice = (input ?? string.Empty).Trim();
         var upper = choice.ToUpperInvariant();
+
+        if (_localBbsMenuMode == LocalBbsMenuMode.SearchGuide)
+        {
+            _localBbsSearchText = choice.Trim();
+            _localBbsPage = 0;
+            _localBbsMenuMode = LocalBbsMenuMode.Guide;
+            RefreshLocalGuideCurrentList();
+            WriteSerialText(BuildAnsiGuideListScreen());
+            return;
+        }
+
+        if (_localBbsMenuMode is LocalBbsMenuMode.SearchDirectory or LocalBbsMenuMode.SearchFavorites)
+        {
+            _localBbsSearchText = choice.Trim();
+            _localBbsPage = 0;
+
+            _localBbsMenuMode = _localBbsMenuMode == LocalBbsMenuMode.SearchFavorites
+                ? LocalBbsMenuMode.Favorites
+                : LocalBbsMenuMode.Directory;
+
+            RefreshLocalBbsCurrentList();
+            WriteSerialText(BuildAnsiPagedBbsListScreen());
+            return;
+        }
 
         if (string.IsNullOrWhiteSpace(choice))
         {
@@ -486,22 +567,178 @@ public sealed class ModemBridge : IDisposable
         {
             _localBbsMenuMode = LocalBbsMenuMode.Main;
             _localBbsCurrentList.Clear();
+            _localBbsSearchText = string.Empty;
+            _localBbsPage = 0;
             WriteSerialText(BuildAnsiMainMenuScreen(firstConnect: false));
+            return;
+        }
+
+
+        if (_localBbsMenuMode == LocalBbsMenuMode.UpdateGuide)
+        {
+            if (upper is "1" or "MONTHLY")
+            {
+                await RunLocalGuideUpdateAsync(GuideDownloadKind.Monthly).ConfigureAwait(false);
+                return;
+            }
+
+            if (upper is "2" or "D" or "DAILY")
+            {
+                await RunLocalGuideUpdateAsync(GuideDownloadKind.Daily).ConfigureAwait(false);
+                return;
+            }
+
+            if (upper is "3" or "S" or "STATUS")
+            {
+                WriteSerialText(BuildAnsiGuideStatusScreen());
+                return;
+            }
+
+            WriteSerialText(BuildAnsiErrorLine("Choose 1 monthly, 2 daily, 3 status, M menu, or Q quit."));
+            return;
+        }
+
+
+        if (_localBbsMenuMode == LocalBbsMenuMode.GuideDetails)
+        {
+            if (_localGuideSelectedEntry is null)
+            {
+                _localBbsMenuMode = LocalBbsMenuMode.Guide;
+                WriteSerialText(BuildAnsiGuideListScreen());
+                return;
+            }
+
+            if (upper is "A" or "ADD")
+            {
+                var added = AddGuideEntryToDirectory(_localGuideSelectedEntry);
+                _localBbsMenuMode = LocalBbsMenuMode.Guide;
+                _localGuideSelectedEntry = null;
+                RefreshLocalGuideCurrentList();
+                WriteSerialText(BuildAnsiGuideAddedScreen(added));
+                return;
+            }
+
+            if (upper is "D" or "DIAL")
+            {
+                var selected = _localGuideSelectedEntry;
+                ResetLocalBbsSession();
+                WriteSerialText(BuildAnsiGuideDialingScreen(selected));
+                await DialAsync(selected.Host + ":" + selected.Port).ConfigureAwait(false);
+                return;
+            }
+
+            if (upper is "G" or "B" or "BACK" or "GUIDE")
+            {
+                _localBbsMenuMode = LocalBbsMenuMode.Guide;
+                _localGuideSelectedEntry = null;
+                WriteSerialText(BuildAnsiGuideListScreen());
+                return;
+            }
+
+            WriteSerialText(BuildAnsiErrorLine("Use A to add, D to dial once, G to return to guide, or Q to quit."));
+            return;
+        }
+
+        if (_localBbsMenuMode == LocalBbsMenuMode.Guide)
+        {
+            var totalPages = GetLocalGuideTotalPages();
+
+            if (upper is "N" or "NEXT")
+            {
+                if (_localBbsPage < totalPages - 1)
+                    _localBbsPage++;
+                WriteSerialText(BuildAnsiGuideListScreen());
+                return;
+            }
+
+            if (upper is "P" or "PREV" or "PREVIOUS")
+            {
+                if (_localBbsPage > 0)
+                    _localBbsPage--;
+                WriteSerialText(BuildAnsiGuideListScreen());
+                return;
+            }
+
+            if (upper is "S" or "SEARCH" or "FIND")
+            {
+                _localBbsMenuMode = LocalBbsMenuMode.SearchGuide;
+                WriteSerialText(BuildAnsiGuideSearchPromptScreen());
+                return;
+            }
+
+            if (upper is "C" or "CLEAR")
+            {
+                _localBbsSearchText = string.Empty;
+                _localBbsPage = 0;
+                RefreshLocalGuideCurrentList();
+                WriteSerialText(BuildAnsiGuideListScreen());
+                return;
+            }
+
+            var visibleGuidePage = GetLocalGuidePageEntries();
+
+            if (int.TryParse(choice, out var selectedNumber) && selectedNumber >= 1 && selectedNumber <= visibleGuidePage.Count)
+            {
+                _localGuideSelectedEntry = visibleGuidePage[selectedNumber - 1];
+                _localBbsMenuMode = LocalBbsMenuMode.GuideDetails;
+                WriteSerialText(BuildAnsiGuideEntryScreen(_localGuideSelectedEntry));
+                return;
+            }
+
+            WriteSerialText(BuildAnsiErrorLine("Enter a listed number, N/P, S search, C clear, M menu, or Q quit."));
             return;
         }
 
         if (_localBbsMenuMode is LocalBbsMenuMode.Directory or LocalBbsMenuMode.Favorites)
         {
-            if (int.TryParse(choice, out var selectedNumber) && selectedNumber >= 1 && selectedNumber <= _localBbsCurrentList.Count)
+            var totalPages = GetLocalBbsTotalPages();
+
+            if (upper is "N" or "NEXT")
             {
-                var selected = _localBbsCurrentList[selectedNumber - 1];
+                if (_localBbsPage < totalPages - 1)
+                    _localBbsPage++;
+                WriteSerialText(BuildAnsiPagedBbsListScreen());
+                return;
+            }
+
+            if (upper is "P" or "PREV" or "PREVIOUS")
+            {
+                if (_localBbsPage > 0)
+                    _localBbsPage--;
+                WriteSerialText(BuildAnsiPagedBbsListScreen());
+                return;
+            }
+
+            if (upper is "S" or "SEARCH" or "FIND")
+            {
+                _localBbsMenuMode = _localBbsMenuMode == LocalBbsMenuMode.Favorites
+                    ? LocalBbsMenuMode.SearchFavorites
+                    : LocalBbsMenuMode.SearchDirectory;
+                WriteSerialText(BuildAnsiSearchPromptScreen());
+                return;
+            }
+
+            if (upper is "C" or "CLEAR")
+            {
+                _localBbsSearchText = string.Empty;
+                _localBbsPage = 0;
+                RefreshLocalBbsCurrentList();
+                WriteSerialText(BuildAnsiPagedBbsListScreen());
+                return;
+            }
+
+            var visiblePage = GetLocalBbsPageEntries();
+
+            if (int.TryParse(choice, out var selectedNumber) && selectedNumber >= 1 && selectedNumber <= visiblePage.Count)
+            {
+                var selected = visiblePage[selectedNumber - 1];
                 ResetLocalBbsSession();
                 WriteSerialText(BuildAnsiDialingScreen(selected));
                 await DialAsync(string.IsNullOrWhiteSpace(selected.Alias) ? selected.DialTarget : selected.Alias).ConfigureAwait(false);
                 return;
             }
 
-            WriteSerialText(BuildAnsiErrorLine("Enter a listed number to dial, M for menu, or Q to quit."));
+            WriteSerialText(BuildAnsiErrorLine("Enter a listed number, N/P, S search, C clear, M menu, or Q quit."));
             return;
         }
 
@@ -512,14 +749,10 @@ public sealed class ModemBridge : IDisposable
             case "DIR":
             case "DIRECTORY":
                 _localBbsMenuMode = LocalBbsMenuMode.Directory;
-                _localBbsCurrentList = DialDirectory
-                    .Where(e => !string.IsNullOrWhiteSpace(e.Host))
-                    .OrderByDescending(e => e.IsFavorite)
-                    .ThenBy(e => e.Name)
-                    .ThenBy(e => e.Alias)
-                    .Take(40)
-                    .ToList();
-                WriteSerialText(BuildAnsiBbsListScreen(_localBbsCurrentList, "BBS DIRECTORY", includeDialPrompt: true));
+                _localBbsSearchText = string.Empty;
+                _localBbsPage = 0;
+                RefreshLocalBbsCurrentList();
+                WriteSerialText(BuildAnsiPagedBbsListScreen());
                 break;
 
             case "2":
@@ -527,13 +760,10 @@ public sealed class ModemBridge : IDisposable
             case "FAV":
             case "FAVORITES":
                 _localBbsMenuMode = LocalBbsMenuMode.Favorites;
-                _localBbsCurrentList = DialDirectory
-                    .Where(e => e.IsFavorite && !string.IsNullOrWhiteSpace(e.Host))
-                    .OrderBy(e => e.Name)
-                    .ThenBy(e => e.Alias)
-                    .Take(40)
-                    .ToList();
-                WriteSerialText(BuildAnsiBbsListScreen(_localBbsCurrentList, "FAVORITES", includeDialPrompt: true));
+                _localBbsSearchText = string.Empty;
+                _localBbsPage = 0;
+                RefreshLocalBbsCurrentList();
+                WriteSerialText(BuildAnsiPagedBbsListScreen());
                 break;
 
             case "3":
@@ -564,8 +794,41 @@ public sealed class ModemBridge : IDisposable
                 WriteSerialText(BuildAnsiAboutScreen());
                 break;
 
+            case "7":
+            case "FEATURED":
+            case "RANDOM":
+                _localBbsMenuMode = LocalBbsMenuMode.Main;
+                WriteSerialText(BuildAnsiRandomScreen());
+                break;
+
+            case "8":
+            case "N":
+            case "NEWS":
+                _localBbsMenuMode = LocalBbsMenuMode.Main;
+                WriteSerialText(BuildAnsiNewsScreen());
+                break;
+
+            case "9":
+            case "G":
+            case "GUIDE":
+            case "IMPORT":
+                _localBbsMenuMode = LocalBbsMenuMode.Guide;
+                _localBbsSearchText = string.Empty;
+                _localBbsPage = 0;
+                RefreshLocalGuideCurrentList();
+                WriteSerialText(BuildAnsiGuideListScreen());
+                break;
+
+            case "10":
+            case "U":
+            case "UPDATE":
+            case "UPDATEGUIDE":
+                _localBbsMenuMode = LocalBbsMenuMode.UpdateGuide;
+                WriteSerialText(BuildAnsiGuideUpdateMenuScreen());
+                break;
+
             default:
-                WriteSerialText(BuildAnsiErrorLine("Unknown menu choice. Enter 1-6, M for menu, or Q to quit."));
+                WriteSerialText(BuildAnsiErrorLine("Unknown menu choice. Enter 1-9, U update, M menu, or Q quit."));
                 break;
         }
     }
@@ -575,6 +838,10 @@ public sealed class ModemBridge : IDisposable
         _localBbsSessionActive = false;
         _localBbsMenuMode = LocalBbsMenuMode.Main;
         _localBbsCurrentList.Clear();
+        _localGuideCurrentList.Clear();
+        _localGuideSelectedEntry = null;
+        _localBbsSearchText = string.Empty;
+        _localBbsPage = 0;
     }
 
     private string BuildAnsiMainMenuScreen(bool firstConnect)
@@ -618,10 +885,22 @@ public sealed class ModemBridge : IDisposable
           .Append(Ansi.BrightBlue).Append("│\r\n");
 
         sb.Append(Ansi.BrightBlue).Append("  │")
+          .Append(Ansi.Yellow).Append("  [7] ")
+          .Append(Ansi.BrightWhite).Append("Featured / Random".PadRight(28))
+          .Append(Ansi.Yellow).Append("  [8] ")
+          .Append(Ansi.BrightWhite).Append("News / Bulletin".PadRight(28))
+          .Append(Ansi.BrightBlue).Append("│\r\n");
+
+        sb.Append(Ansi.BrightBlue).Append("  │")
+          .Append(Ansi.Yellow).Append("  [9] ")
+          .Append(Ansi.BrightWhite).Append("Browse Import Guide".PadRight(28))
+          .Append(Ansi.Yellow).Append("  [U] ")
+          .Append(Ansi.BrightWhite).Append("Update Guide".PadRight(28))
+          .Append(Ansi.BrightBlue).Append("│\r\n");
+
+        sb.Append(Ansi.BrightBlue).Append("  │")
           .Append(Ansi.Red).Append("  [Q] ")
-          .Append(Ansi.BrightWhite).Append("Disconnect".PadRight(28))
-          .Append(Ansi.Cyan).Append("  [M] ")
-          .Append(Ansi.BrightWhite).Append("Refresh this menu".PadRight(28))
+          .Append(Ansi.BrightWhite).Append("Disconnect".PadRight(61))
           .Append(Ansi.BrightBlue).Append("│\r\n");
 
         sb.Append(Ansi.BrightBlue).Append("  └").Append(new string('─', innerWidth)).Append("┘\r\n");
@@ -683,6 +962,585 @@ public sealed class ModemBridge : IDisposable
 
         sb.Append(Ansi.BrightBlue).Append(bottomBorder);
         sb.Append("\r\n");
+        return sb.ToString();
+    }
+
+
+    private string BuildAnsiNewsScreen()
+    {
+        var sb = new StringBuilder();
+        sb.Append(Ansi.Clear);
+        sb.Append(Ansi.Home);
+        sb.Append(BuildAnsiHeader("RetroModem Bridge", "NEWS / BULLETIN"));
+        sb.Append(Ansi.Line(Ansi.BrightWhite, "  RetroModem Bridge Local Bulletin\r\n"));
+        sb.Append(Ansi.Line(Ansi.Dim, "  --------------------------------\r\n\r\n"));
+        sb.Append(Ansi.Line(Ansi.Cyan, "  New in this build:\r\n"));
+        sb.Append(Ansi.Line(Ansi.BrightWhite, "  * Session Mirror with optional input and local echo\r\n"));
+        sb.Append(Ansi.Line(Ansi.BrightWhite, "  * Test All Favorites and BBS health/status tracking\r\n"));
+        sb.Append(Ansi.Line(Ansi.BrightWhite, "  * Retro computer profiles and support bundle export\r\n"));
+        sb.Append(Ansi.Line(Ansi.BrightWhite, "  * Local services: NEWS, RANDOM, FEATURED, ONLINE\r\n\r\n"));
+        sb.Append(Ansi.Line(Ansi.Yellow, "  Try: ATDT RANDOM, ATDT NEWS, ATDT ONLINE, ATDT FAVORITES\r\n"));
+        sb.Append(BuildAnsiPrompt());
+        return sb.ToString();
+    }
+
+    private string BuildAnsiFeaturedScreen()
+    {
+        var featured = DialDirectory
+            .Where(e => e.IsFavorite && !string.IsNullOrWhiteSpace(e.Host))
+            .OrderByDescending(e => e.LastResult.Contains("Online", StringComparison.OrdinalIgnoreCase))
+            .ThenBy(e => e.Name)
+            .FirstOrDefault()
+            ?? DialDirectory.FirstOrDefault(e => !string.IsNullOrWhiteSpace(e.Host));
+
+        var sb = new StringBuilder();
+        sb.Append(Ansi.Clear);
+        sb.Append(Ansi.Home);
+        sb.Append(BuildAnsiHeader("RetroModem Bridge", "FEATURED BBS"));
+
+        if (featured is null)
+        {
+            sb.Append(Ansi.Line(Ansi.Yellow, "  No BBS entries saved yet.\r\n"));
+            sb.Append(BuildAnsiPrompt());
+            return sb.ToString();
+        }
+
+        sb.Append(Ansi.Line(Ansi.BrightWhite, "  " + featured.DisplayName + "\r\n"));
+        sb.Append(Ansi.Line(Ansi.Cyan, "  Host: " + featured.Host + ":" + featured.Port + "\r\n"));
+        sb.Append(Ansi.Line(Ansi.Cyan, "  Alias: ATDT" + featured.Alias + "\r\n"));
+        sb.Append(Ansi.Line(Ansi.Dim, "  Status: " + (string.IsNullOrWhiteSpace(featured.LastResult) ? "Not checked" : featured.LastResult) + "\r\n\r\n"));
+        sb.Append(Ansi.Line(Ansi.Yellow, "  Dial it from your terminal with ATDT" + featured.Alias + "\r\n"));
+        sb.Append(BuildAnsiPrompt());
+        return sb.ToString();
+    }
+
+    private string BuildAnsiRandomScreen()
+    {
+        var candidates = DialDirectory
+            .Where(e => e.IsFavorite && !string.IsNullOrWhiteSpace(e.Host))
+            .ToList();
+
+        if (candidates.Count == 0)
+            candidates = DialDirectory.Where(e => !string.IsNullOrWhiteSpace(e.Host)).ToList();
+
+        var pick = candidates.Count == 0 ? null : candidates[Random.Shared.Next(candidates.Count)];
+
+        var sb = new StringBuilder();
+        sb.Append(Ansi.Clear);
+        sb.Append(Ansi.Home);
+        sb.Append(BuildAnsiHeader("RetroModem Bridge", "RANDOM BBS"));
+
+        if (pick is null)
+        {
+            sb.Append(Ansi.Line(Ansi.Yellow, "  No BBS entries saved yet.\r\n"));
+            sb.Append(BuildAnsiPrompt());
+            return sb.ToString();
+        }
+
+        sb.Append(Ansi.Line(Ansi.BrightWhite, "  Random pick: " + pick.DisplayName + "\r\n"));
+        sb.Append(Ansi.Line(Ansi.Cyan, "  Host: " + pick.Host + ":" + pick.Port + "\r\n"));
+        sb.Append(Ansi.Line(Ansi.Cyan, "  Dial: ATDT" + pick.Alias + "\r\n"));
+        sb.Append(Ansi.Line(Ansi.Dim, "  Notes: " + Truncate(pick.Notes, 50) + "\r\n\r\n"));
+        sb.Append(Ansi.Line(Ansi.Yellow, "  Type ATDT" + pick.Alias + " to dial this board.\r\n"));
+        sb.Append(BuildAnsiPrompt());
+        return sb.ToString();
+    }
+
+    private void RefreshLocalBbsCurrentList()
+    {
+        IEnumerable<BbsEntry> entries = DialDirectory.Where(e => !string.IsNullOrWhiteSpace(e.Host));
+
+        if (_localBbsMenuMode is LocalBbsMenuMode.Favorites or LocalBbsMenuMode.SearchFavorites)
+            entries = entries.Where(e => e.IsFavorite);
+
+        if (!string.IsNullOrWhiteSpace(_localBbsSearchText))
+            entries = entries.Where(e => MatchesLocalBbsSearch(e, _localBbsSearchText));
+
+        _localBbsCurrentList = entries
+            .OrderByDescending(e => e.IsFavorite)
+            .ThenBy(e => e.Name)
+            .ThenBy(e => e.Alias)
+            .ToList();
+
+        var totalPages = GetLocalBbsTotalPages();
+        if (_localBbsPage >= totalPages)
+            _localBbsPage = Math.Max(0, totalPages - 1);
+    }
+
+    private static bool MatchesLocalBbsSearch(BbsEntry entry, string search)
+    {
+        if (string.IsNullOrWhiteSpace(search))
+            return true;
+
+        return entry.Alias.Contains(search, StringComparison.OrdinalIgnoreCase)
+            || entry.Name.Contains(search, StringComparison.OrdinalIgnoreCase)
+            || entry.Host.Contains(search, StringComparison.OrdinalIgnoreCase)
+            || entry.Category.Contains(search, StringComparison.OrdinalIgnoreCase)
+            || entry.SystemType.Contains(search, StringComparison.OrdinalIgnoreCase)
+            || entry.Notes.Contains(search, StringComparison.OrdinalIgnoreCase)
+            || entry.LastResult.Contains(search, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private int GetLocalBbsTotalPages()
+    {
+        return Math.Max(1, (int)Math.Ceiling(_localBbsCurrentList.Count / (double)LocalBbsPageSize));
+    }
+
+    private List<BbsEntry> GetLocalBbsPageEntries()
+    {
+        return _localBbsCurrentList
+            .Skip(_localBbsPage * LocalBbsPageSize)
+            .Take(LocalBbsPageSize)
+            .ToList();
+    }
+
+    private string BuildAnsiPagedBbsListScreen()
+    {
+        var title = _localBbsMenuMode == LocalBbsMenuMode.Favorites ? "FAVORITES" : "BBS DIRECTORY";
+        var list = GetLocalBbsPageEntries();
+        var totalPages = GetLocalBbsTotalPages();
+
+        var sb = new StringBuilder();
+        sb.Append(Ansi.Clear);
+        sb.Append(Ansi.Home);
+        sb.Append(BuildAnsiHeader("RetroModem Bridge", title));
+
+        var searchLabel = string.IsNullOrWhiteSpace(_localBbsSearchText)
+            ? "none"
+            : Truncate(_localBbsSearchText, 34);
+
+        sb.Append(Ansi.Cyan).Append("  Page ").Append((_localBbsPage + 1).ToString()).Append(" of ").Append(totalPages.ToString());
+        sb.Append(Ansi.Dim).Append("   Matches: ").Append(_localBbsCurrentList.Count.ToString());
+        sb.Append(Ansi.Dim).Append("   Search: ").Append(searchLabel).Append(Ansi.Reset).Append("\r\n\r\n");
+
+        if (list.Count == 0)
+        {
+            sb.Append(Ansi.Line(Ansi.Yellow, _localBbsMenuMode == LocalBbsMenuMode.Favorites ? "  No matching favorites found.\r\n" : "  No matching BBS entries found.\r\n"));
+        }
+        else
+        {
+            for (var i = 0; i < list.Count; i++)
+            {
+                var entry = list[i];
+                var number = (i + 1).ToString("00");
+                var star = entry.IsFavorite ? "*" : " ";
+                var name = Truncate(string.IsNullOrWhiteSpace(entry.Name) ? entry.DialTarget : entry.Name.Trim(), 26);
+                var alias = Truncate(string.IsNullOrWhiteSpace(entry.Alias) ? entry.DialTarget : entry.Alias.Trim(), 12);
+                var ansi = entry.SupportsAnsi ? "ANSI" : "TXT ";
+                var status = Truncate(string.IsNullOrWhiteSpace(entry.LastResult) ? "" : entry.LastResult, 10);
+
+                sb.Append(Ansi.Yellow).Append("  [").Append(number).Append("] ");
+                sb.Append(entry.IsFavorite ? Ansi.Magenta : Ansi.Dim).Append(star).Append(' ');
+                sb.Append(Ansi.BrightWhite).Append(name.PadRight(26));
+                sb.Append(Ansi.Cyan).Append(' ').Append(alias.PadRight(12));
+                sb.Append(Ansi.Green).Append(' ').Append(ansi);
+                if (!string.IsNullOrWhiteSpace(status))
+                    sb.Append(Ansi.Dim).Append(' ').Append(status);
+                sb.Append(Ansi.Reset).Append("\r\n");
+            }
+        }
+
+        sb.Append("\r\n");
+        sb.Append(Ansi.Line(Ansi.Dim, "  01-15 = dial  N = next  P = prev  S = search  C = clear\r\n"));
+        sb.Append(Ansi.Line(Ansi.Dim, "  M = main menu  Q = disconnect\r\n"));
+        sb.Append(BuildAnsiPrompt());
+        return sb.ToString();
+    }
+
+    private string BuildAnsiSearchPromptScreen()
+    {
+        var title = _localBbsMenuMode == LocalBbsMenuMode.SearchFavorites
+            ? "SEARCH FAVORITES"
+            : "SEARCH DIRECTORY";
+
+        var sb = new StringBuilder();
+        sb.Append(Ansi.Clear);
+        sb.Append(Ansi.Home);
+        sb.Append(BuildAnsiHeader("RetroModem Bridge", title));
+        sb.Append(Ansi.Line(Ansi.BrightWhite, "  Search by name, alias, host, category, system, notes,\r\n"));
+        sb.Append(Ansi.Line(Ansi.BrightWhite, "  or last connection result.\r\n\r\n"));
+        sb.Append(Ansi.Line(Ansi.Dim, "  Examples: coco, mystic, ansi, games, florida, online\r\n\r\n"));
+        sb.Append(Ansi.Line(Ansi.Yellow, "  Search for: "));
+        return sb.ToString();
+    }
+
+    private void RefreshLocalGuideCurrentList()
+    {
+        var existing = DialDirectory
+            .Where(e => !string.IsNullOrWhiteSpace(e.Host))
+            .Select(e => $"{e.Host.Trim().ToLowerInvariant()}:{e.Port}")
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        IEnumerable<BbsGuideEntry> entries;
+        try
+        {
+            entries = BbsGuideParser.LoadCurrentList()
+                .Where(e => !string.IsNullOrWhiteSpace(e.Host))
+                .Where(e => !existing.Contains($"{e.Host.Trim().ToLowerInvariant()}:{e.Port}"));
+        }
+        catch (Exception ex)
+        {
+            LogMessage("Could not load bundled Telnet BBS Guide: " + ex.Message);
+            entries = Array.Empty<BbsGuideEntry>();
+        }
+
+        if (!string.IsNullOrWhiteSpace(_localBbsSearchText))
+            entries = entries.Where(e => MatchesLocalGuideSearch(e, _localBbsSearchText));
+
+        _localGuideCurrentList = entries
+            .OrderBy(e => e.Name, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(e => e.Host, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var totalPages = GetLocalGuideTotalPages();
+        if (_localBbsPage >= totalPages)
+            _localBbsPage = Math.Max(0, totalPages - 1);
+    }
+
+    private static bool MatchesLocalGuideSearch(BbsGuideEntry entry, string search)
+    {
+        if (string.IsNullOrWhiteSpace(search))
+            return true;
+
+        return entry.Name.Contains(search, StringComparison.OrdinalIgnoreCase)
+            || entry.Host.Contains(search, StringComparison.OrdinalIgnoreCase)
+            || entry.Software.Contains(search, StringComparison.OrdinalIgnoreCase)
+            || entry.Location.Contains(search, StringComparison.OrdinalIgnoreCase)
+            || entry.Source.Contains(search, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private int GetLocalGuideTotalPages()
+    {
+        return Math.Max(1, (int)Math.Ceiling(_localGuideCurrentList.Count / (double)LocalBbsPageSize));
+    }
+
+    private List<BbsGuideEntry> GetLocalGuidePageEntries()
+    {
+        return _localGuideCurrentList
+            .Skip(_localBbsPage * LocalBbsPageSize)
+            .Take(LocalBbsPageSize)
+            .ToList();
+    }
+
+    private BbsEntry AddGuideEntryToDirectory(BbsGuideEntry guideEntry)
+    {
+        var existing = DialDirectory.FirstOrDefault(e =>
+            string.Equals(e.Host.Trim(), guideEntry.Host.Trim(), StringComparison.OrdinalIgnoreCase) &&
+            e.Port == guideEntry.Port);
+
+        if (existing is not null)
+            return existing;
+
+        var alias = NextDirectoryAlias();
+        var entry = guideEntry.ToDirectoryEntry(alias);
+
+        if (DialDirectory is IList<BbsEntry> list)
+            list.Add(entry);
+
+        DirectoryChanged?.Invoke();
+        LogMessage($"Added guide entry from local BBS: {entry.DisplayName} ({entry.Host}:{entry.Port}) as alias {entry.Alias}.");
+        return entry;
+    }
+
+    private string NextDirectoryAlias()
+    {
+        var used = DialDirectory
+            .Select(e => e.Alias)
+            .Where(a => !string.IsNullOrWhiteSpace(a))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        for (var i = 1; i < 10000; i++)
+        {
+            var alias = i.ToString();
+            if (!used.Contains(alias))
+                return alias;
+        }
+
+        return DateTime.Now.ToString("HHmmss");
+    }
+
+    private async Task RunLocalGuideUpdateAsync(GuideDownloadKind kind)
+    {
+        try
+        {
+            var progress = new Progress<string>(status =>
+            {
+                var parts = status.Split('|', 2);
+                var percent = 0;
+                var message = status;
+
+                if (parts.Length == 2 && int.TryParse(parts[0], out var parsed))
+                {
+                    percent = parsed;
+                    message = parts[1];
+                }
+
+                WriteSerialText(BuildAnsiGuideUpdateProgressScreen(kind, percent, message));
+            });
+
+            WriteSerialText(BuildAnsiGuideUpdateProgressScreen(kind, 5, "Starting guide update"));
+            var result = await TelnetBbsGuideUpdater.DownloadAndInstallAsync(kind, progress).ConfigureAwait(false);
+
+            _localBbsMenuMode = LocalBbsMenuMode.UpdateGuide;
+            WriteSerialText(BuildAnsiGuideUpdateCompleteScreen(result));
+        }
+        catch (Exception ex)
+        {
+            _localBbsMenuMode = LocalBbsMenuMode.UpdateGuide;
+            WriteSerialText(BuildAnsiGuideUpdateErrorScreen(ex.Message));
+            LogMessage("Guide update failed: " + ex.Message);
+        }
+    }
+
+    private (int DirectoryCount, int GuideCount, int NewCount, int AlreadyAddedCount, int FavoritesCount, int OnlineCount) GetGuideStats()
+    {
+        var directoryEntries = DialDirectory
+            .Where(e => !string.IsNullOrWhiteSpace(e.Host))
+            .ToList();
+
+        var existing = directoryEntries
+            .Select(e => $"{e.Host.Trim().ToLowerInvariant()}:{e.Port}")
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var guideEntries = new List<BbsGuideEntry>();
+
+        try
+        {
+            guideEntries = BbsGuideParser.LoadCurrentList()
+                .Where(e => !string.IsNullOrWhiteSpace(e.Host))
+                .GroupBy(e => $"{e.Host.Trim().ToLowerInvariant()}:{e.Port}")
+                .Select(g => g.First())
+                .ToList();
+        }
+        catch
+        {
+        }
+
+        var alreadyAdded = guideEntries.Count(e => existing.Contains($"{e.Host.Trim().ToLowerInvariant()}:{e.Port}"));
+        var newCount = Math.Max(0, guideEntries.Count - alreadyAdded);
+        var favorites = directoryEntries.Count(e => e.IsFavorite);
+        var online = directoryEntries.Count(e =>
+            e.LastResult.Contains("Online", StringComparison.OrdinalIgnoreCase) ||
+            e.LastResult.Contains("Connected", StringComparison.OrdinalIgnoreCase));
+
+        return (directoryEntries.Count, guideEntries.Count, newCount, alreadyAdded, favorites, online);
+    }
+
+    private string BuildAnsiGuideStatsBlock()
+    {
+        var stats = GetGuideStats();
+        var sb = new StringBuilder();
+
+        sb.Append(Ansi.BrightBlue).Append("  ┌").Append(new string('─', 58)).Append("┐\r\n");
+        sb.Append(Ansi.BrightBlue).Append("  │").Append(Ansi.BrightWhite).Append("  GUIDE / DIRECTORY STATS".PadRight(58)).Append(Ansi.BrightBlue).Append("│\r\n");
+        sb.Append(Ansi.BrightBlue).Append("  │").Append(Ansi.Cyan).Append("  Current BBS Directory listings : ").Append(Ansi.BrightWhite).Append(stats.DirectoryCount.ToString().PadLeft(5)).Append(Ansi.BrightBlue).Append(new string(' ', 18)).Append("│\r\n");
+        sb.Append(Ansi.BrightBlue).Append("  │").Append(Ansi.Cyan).Append("  Current guide listings         : ").Append(Ansi.BrightWhite).Append(stats.GuideCount.ToString().PadLeft(5)).Append(Ansi.BrightBlue).Append(new string(' ', 18)).Append("│\r\n");
+        sb.Append(Ansi.BrightBlue).Append("  │").Append(Ansi.Green).Append("  New guide listings to add      : ").Append(Ansi.BrightWhite).Append(stats.NewCount.ToString().PadLeft(5)).Append(Ansi.BrightBlue).Append(new string(' ', 18)).Append("│\r\n");
+        sb.Append(Ansi.BrightBlue).Append("  │").Append(Ansi.Dim).Append("  Already in your directory      : ").Append(Ansi.BrightWhite).Append(stats.AlreadyAddedCount.ToString().PadLeft(5)).Append(Ansi.BrightBlue).Append(new string(' ', 18)).Append("│\r\n");
+        sb.Append(Ansi.BrightBlue).Append("  │").Append(Ansi.Magenta).Append("  Favorites / online-tested      : ").Append(Ansi.BrightWhite).Append(stats.FavoritesCount.ToString().PadLeft(5)).Append(Ansi.Dim).Append(" / ").Append(Ansi.BrightWhite).Append(stats.OnlineCount.ToString().PadLeft(5)).Append(Ansi.BrightBlue).Append(new string(' ', 10)).Append("│\r\n");
+        sb.Append(Ansi.BrightBlue).Append("  └").Append(new string('─', 58)).Append("┘\r\n\r\n");
+
+        return sb.ToString();
+    }
+
+    private string BuildAnsiGuideUpdateMenuScreen()
+    {
+        var sb = new StringBuilder();
+        sb.Append(Ansi.Clear);
+        sb.Append(Ansi.Home);
+        sb.Append(BuildAnsiHeader("RetroModem Bridge", "UPDATE BBS GUIDE"));
+        sb.Append(Ansi.Line(Ansi.BrightWhite, "  Download the latest Telnet BBS Guide from the web.\r\n\r\n"));
+        sb.Append(BuildAnsiGuideStatsBlock());
+        sb.Append(Ansi.Line(Ansi.Yellow, "  [1] Monthly official list\r\n"));
+        sb.Append(Ansi.Line(Ansi.Yellow, "  [2] Daily personal-use list\r\n"));
+        sb.Append(Ansi.Line(Ansi.Yellow, "  [3] Current guide status\r\n\r\n"));
+        sb.Append(Ansi.Line(Ansi.Dim, "  M = main menu, Q = disconnect\r\n\r\n"));
+        sb.Append(Ansi.Line(Ansi.Cyan, "  " + TelnetBbsGuideUpdater.GetStatusText() + "\r\n"));
+        sb.Append(BuildAnsiPrompt());
+        return sb.ToString();
+    }
+
+    private string BuildAnsiGuideStatusScreen()
+    {
+        var sb = new StringBuilder();
+        sb.Append(Ansi.Clear);
+        sb.Append(Ansi.Home);
+        sb.Append(BuildAnsiHeader("RetroModem Bridge", "GUIDE STATUS"));
+        sb.Append(Ansi.Line(Ansi.BrightWhite, "  " + TelnetBbsGuideUpdater.GetStatusText() + "\r\n\r\n"));
+        sb.Append(BuildAnsiGuideStatsBlock());
+        sb.Append(Ansi.Line(Ansi.Dim, "  Guide path:\r\n"));
+        sb.Append(Ansi.Line(Ansi.Cyan, "  " + Truncate(TelnetBbsGuideUpdater.GetPreferredCsvPath(), 62) + "\r\n\r\n"));
+        sb.Append(Ansi.Line(Ansi.Dim, "  Use ATDT GUIDE to browse entries not already in your directory.\r\n"));
+        sb.Append(BuildAnsiPrompt());
+        return sb.ToString();
+    }
+
+    private string BuildAnsiGuideUpdateProgressScreen(GuideDownloadKind kind, int percent, string message)
+    {
+        percent = Math.Max(0, Math.Min(100, percent));
+        var width = 42;
+        var filled = (int)Math.Round(width * (percent / 100.0));
+        var empty = Math.Max(0, width - filled);
+        var bar = new string('█', filled) + new string('░', empty);
+
+        var sb = new StringBuilder();
+        sb.Append(Ansi.Clear);
+        sb.Append(Ansi.Home);
+        sb.Append(BuildAnsiHeader("RetroModem Bridge", "GUIDE UPDATE"));
+        sb.Append(Ansi.Line(Ansi.BrightWhite, "  Source: " + kind + "\r\n\r\n"));
+        sb.Append(Ansi.BrightBlue).Append("  ╔").Append(new string('═', width)).Append("╗\r\n");
+        sb.Append(Ansi.BrightBlue).Append("  ║").Append(Ansi.Green).Append(bar).Append(Ansi.BrightBlue).Append("║\r\n");
+        sb.Append(Ansi.BrightBlue).Append("  ╚").Append(new string('═', width)).Append("╝\r\n");
+        sb.Append(Ansi.Yellow).Append("  ").Append(percent.ToString().PadLeft(3)).Append("%  ");
+        sb.Append(Ansi.BrightWhite).Append(Truncate(message, 46)).Append(Ansi.Reset).Append("\r\n\r\n");
+        sb.Append(Ansi.Dim).Append("  Please wait. Do not hang up while the guide updates.\r\n");
+        return sb.ToString();
+    }
+
+    private string BuildAnsiGuideUpdateCompleteScreen(GuideUpdateResult result)
+    {
+        RefreshLocalGuideCurrentList();
+
+        var sb = new StringBuilder();
+        sb.Append(Ansi.Clear);
+        sb.Append(Ansi.Home);
+        sb.Append(BuildAnsiHeader("RetroModem Bridge", "GUIDE UPDATED"));
+        var stats = GetGuideStats();
+
+        sb.Append(Ansi.Line(Ansi.Green, "  Update complete!\r\n\r\n"));
+        sb.Append(Ansi.Line(Ansi.BrightWhite, "  Source: " + result.Kind + "\r\n"));
+        sb.Append(Ansi.Line(Ansi.BrightWhite, "  Downloaded guide entries: " + result.EntryCount + "\r\n"));
+        sb.Append(Ansi.Line(Ansi.Cyan, "  Current BBS Directory listings: " + stats.DirectoryCount + "\r\n"));
+        sb.Append(Ansi.Line(Ansi.Green, "  New guide listings to add: " + stats.NewCount + "\r\n"));
+        sb.Append(Ansi.Line(Ansi.Dim, "  Already in your directory: " + stats.AlreadyAddedCount + "\r\n"));
+        sb.Append(Ansi.Line(Ansi.Magenta, "  Favorites / online-tested: " + stats.FavoritesCount + " / " + stats.OnlineCount + "\r\n\r\n"));
+        sb.Append(Ansi.Line(Ansi.Yellow, "  Type ATDT GUIDE or choose 9 from the menu to browse.\r\n\r\n"));
+        sb.Append(Ansi.Line(Ansi.Dim, "  M = main menu, Q = disconnect\r\n"));
+        sb.Append(BuildAnsiPrompt());
+        return sb.ToString();
+    }
+
+    private string BuildAnsiGuideUpdateErrorScreen(string message)
+    {
+        var sb = new StringBuilder();
+        sb.Append(Ansi.Clear);
+        sb.Append(Ansi.Home);
+        sb.Append(BuildAnsiHeader("RetroModem Bridge", "UPDATE FAILED"));
+        sb.Append(Ansi.Line(Ansi.Red, "  Could not update the Telnet BBS Guide.\r\n\r\n"));
+        sb.Append(Ansi.Line(Ansi.BrightWhite, "  " + Truncate(message, 62) + "\r\n\r\n"));
+        sb.Append(Ansi.Line(Ansi.Dim, "  The site may be blocking automated downloads.\r\n"));
+        sb.Append(Ansi.Line(Ansi.Dim, "  Use the Windows app to load a downloaded ZIP/CSV manually.\r\n\r\n"));
+        sb.Append(Ansi.Line(Ansi.Dim, "  M = main menu, Q = disconnect\r\n"));
+        sb.Append(BuildAnsiPrompt());
+        return sb.ToString();
+    }
+
+    private string BuildAnsiGuideListScreen()
+    {
+        var list = GetLocalGuidePageEntries();
+        var totalPages = GetLocalGuideTotalPages();
+
+        var sb = new StringBuilder();
+        sb.Append(Ansi.Clear);
+        sb.Append(Ansi.Home);
+        sb.Append(BuildAnsiHeader("RetroModem Bridge", "IMPORT GUIDE"));
+
+        var searchLabel = string.IsNullOrWhiteSpace(_localBbsSearchText)
+            ? "none"
+            : Truncate(_localBbsSearchText, 34);
+
+        sb.Append(Ansi.Cyan).Append("  Page ").Append((_localBbsPage + 1).ToString()).Append(" of ").Append(totalPages.ToString());
+        sb.Append(Ansi.Dim).Append("   Not in directory: ").Append(_localGuideCurrentList.Count.ToString());
+        sb.Append(Ansi.Dim).Append("   Search: ").Append(searchLabel).Append(Ansi.Reset).Append("\r\n\r\n");
+
+        if (list.Count == 0)
+        {
+            sb.Append(Ansi.Line(Ansi.Yellow, "  No guide entries found that are not already in your directory.\r\n"));
+        }
+        else
+        {
+            for (var i = 0; i < list.Count; i++)
+            {
+                var entry = list[i];
+                var number = (i + 1).ToString("00");
+                var name = Truncate(entry.Name, 27);
+                var host = Truncate(entry.Host + ":" + entry.Port, 25);
+                var software = Truncate(entry.Software, 10);
+
+                sb.Append(Ansi.Yellow).Append("  [").Append(number).Append("] ");
+                sb.Append(Ansi.BrightWhite).Append(name.PadRight(27));
+                sb.Append(Ansi.Cyan).Append(' ').Append(host.PadRight(25));
+                if (!string.IsNullOrWhiteSpace(software))
+                    sb.Append(Ansi.Dim).Append(' ').Append(software);
+                sb.Append(Ansi.Reset).Append("\r\n");
+            }
+        }
+
+        sb.Append("\r\n");
+        sb.Append(Ansi.Line(Ansi.Dim, "  01-15 = view  N = next  P = prev  S = search  C = clear\r\n"));
+        sb.Append(Ansi.Line(Ansi.Dim, "  M = main menu  Q = disconnect\r\n"));
+        sb.Append(BuildAnsiPrompt());
+        return sb.ToString();
+    }
+
+    private string BuildAnsiGuideEntryScreen(BbsGuideEntry entry)
+    {
+        var sb = new StringBuilder();
+        sb.Append(Ansi.Clear);
+        sb.Append(Ansi.Home);
+        sb.Append(BuildAnsiHeader("RetroModem Bridge", "GUIDE ENTRY"));
+
+        sb.Append(Ansi.Line(Ansi.BrightWhite, "  " + Truncate(entry.Name, 58) + "\r\n"));
+        sb.Append(Ansi.Line(Ansi.Cyan, "  Host: " + entry.Host + ":" + entry.Port + "\r\n"));
+        if (!string.IsNullOrWhiteSpace(entry.Software))
+            sb.Append(Ansi.Line(Ansi.Cyan, "  Software: " + Truncate(entry.Software, 48) + "\r\n"));
+        if (!string.IsNullOrWhiteSpace(entry.Location))
+            sb.Append(Ansi.Line(Ansi.Cyan, "  Location: " + Truncate(entry.Location, 48) + "\r\n"));
+
+        sb.Append("\r\n");
+        sb.Append(Ansi.Line(Ansi.Yellow, "  [A] Add to your BBS Directory\r\n"));
+        sb.Append(Ansi.Line(Ansi.Yellow, "  [D] Dial once without saving\r\n"));
+        sb.Append(Ansi.Line(Ansi.Yellow, "  [G] Back to guide list\r\n"));
+        sb.Append(Ansi.Line(Ansi.Dim, "  M = main menu, Q = disconnect\r\n"));
+        sb.Append(BuildAnsiPrompt());
+        return sb.ToString();
+    }
+
+    private string BuildAnsiGuideAddedScreen(BbsEntry entry)
+    {
+        var sb = new StringBuilder();
+        sb.Append(Ansi.Clear);
+        sb.Append(Ansi.Home);
+        sb.Append(BuildAnsiHeader("RetroModem Bridge", "ADDED TO DIRECTORY"));
+        sb.Append(Ansi.Line(Ansi.BrightWhite, "  Added: " + Truncate(entry.DisplayName, 50) + "\r\n"));
+        sb.Append(Ansi.Line(Ansi.Cyan, "  Host: " + entry.Host + ":" + entry.Port + "\r\n"));
+        sb.Append(Ansi.Line(Ansi.Cyan, "  Alias: " + entry.Alias + "\r\n\r\n"));
+        sb.Append(Ansi.Line(Ansi.Yellow, "  Dial anytime with: ATDT" + entry.Alias + "\r\n\r\n"));
+        sb.Append(Ansi.Line(Ansi.Dim, "  Returning to the guide list. The added board is now hidden.\r\n\r\n"));
+        sb.Append(Ansi.Line(Ansi.Dim, "  N/P browse, S search, M menu, Q quit\r\n"));
+        sb.Append(BuildAnsiPrompt());
+        return sb.ToString();
+    }
+
+    private static string BuildAnsiGuideDialingScreen(BbsGuideEntry entry)
+    {
+        return Ansi.Clear + Ansi.Home +
+               Ansi.Line(Ansi.BrightBlue, "\r\n  Dialing guide entry once...\r\n") +
+               Ansi.Line(Ansi.BrightWhite, "  " + entry.Name + "\r\n") +
+               Ansi.Line(Ansi.Cyan, "  " + entry.Host + ":" + entry.Port + "\r\n\r\n") +
+               Ansi.Reset;
+    }
+
+    private string BuildAnsiGuideSearchPromptScreen()
+    {
+        var sb = new StringBuilder();
+        sb.Append(Ansi.Clear);
+        sb.Append(Ansi.Home);
+        sb.Append(BuildAnsiHeader("RetroModem Bridge", "SEARCH IMPORT GUIDE"));
+        sb.Append(Ansi.Line(Ansi.BrightWhite, "  Search the bundled Telnet BBS Guide entries that are\r\n"));
+        sb.Append(Ansi.Line(Ansi.BrightWhite, "  not already in your BBS Directory.\r\n\r\n"));
+        sb.Append(Ansi.Line(Ansi.Dim, "  Examples: coco, mystic, synchronet, games, florida\r\n\r\n"));
+        sb.Append(Ansi.Line(Ansi.Yellow, "  Search for: "));
         return sb.ToString();
     }
 
@@ -798,7 +1656,9 @@ public sealed class ModemBridge : IDisposable
         sb.Append(Ansi.Line(Ansi.Yellow, "  ATDT HOST:PORT      ") + Ansi.Line(Ansi.BrightWhite, "Dial direct Telnet host\r\n"));
         sb.Append(Ansi.Line(Ansi.Yellow, "  ATDL                ") + Ansi.Line(Ansi.BrightWhite, "Redial last number\r\n"));
         sb.Append(Ansi.Line(Ansi.Yellow, "  ATH                 ") + Ansi.Line(Ansi.BrightWhite, "Hang up\r\n\r\n"));
-        sb.Append(Ansi.Line(Ansi.Magenta, "  Local services: ATDT MENU, HELP, TIME, BBSLIST, FAVORITES\r\n\r\n"));
+        sb.Append(Ansi.Line(Ansi.Magenta, "  Local services: ATDT MENU, HELP, TIME, BBSLIST, FAVORITES\r\n"));
+        sb.Append(Ansi.Line(Ansi.Magenta, "                  ATDT NEWS, RANDOM, FEATURED, ONLINE, GUIDE, UPDATEGUIDE\r\n"));
+        sb.Append(Ansi.Line(Ansi.Dim, "  Directory menu: N next, P previous, S search, C clear search\r\n\r\n"));
         sb.Append(includeMenuPrompt ? BuildAnsiPrompt() : Ansi.Line(Ansi.Green, "OK\r\n"));
         return sb.ToString();
     }
@@ -903,6 +1763,7 @@ public sealed class ModemBridge : IDisposable
             return;
 
         entry.LastDialed = DateTime.Now;
+        entry.LastChecked = DateTime.Now;
         entry.LastResult = result;
         DirectoryChanged?.Invoke();
     }
@@ -1155,7 +2016,13 @@ internal enum LocalBbsMenuMode
 {
     Main,
     Directory,
-    Favorites
+    Favorites,
+    SearchDirectory,
+    SearchFavorites,
+    Guide,
+    SearchGuide,
+    GuideDetails,
+    UpdateGuide
 }
 
 internal static class Ansi

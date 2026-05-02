@@ -1,4 +1,7 @@
-RetroModem Bridge v3 Beta 2
-Version: v3.0-beta.2
+RetroModem Bridge v3 Beta 3
+Version: v3.0-beta.3
+Tag: v3.0-beta.3
 Release type: beta / pre-release
-Recommended GitHub tag: v3.0-beta.2
+Recommended asset: RetroModemBridge-v3.0-beta.3-win-x64.zip
+
+This is the recommended v3 Beta 3 release package.

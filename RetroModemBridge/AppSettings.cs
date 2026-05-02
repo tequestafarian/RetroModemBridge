@@ -15,6 +15,8 @@ public sealed class AppSettings
     public bool PlayStartupSound { get; set; } = true;
     public List<BbsEntry> DialDirectory { get; set; } = CreateDefaultDirectory();
     public List<DialHistoryEntry> DialHistory { get; set; } = new();
+    public List<RetroComputerProfile> Profiles { get; set; } = CreateDefaultProfiles();
+    public string FeaturedBbsAlias { get; set; } = "1";
 
     private static string PortableDir => AppContext.BaseDirectory;
     private static string PortableSettingsPath => Path.Combine(PortableDir, "settings-v3-beta.json");
@@ -37,6 +39,8 @@ public sealed class AppSettings
             var settings = JsonSerializer.Deserialize<AppSettings>(json) ?? new AppSettings();
             if (settings.DialDirectory.Count == 0)
                 settings.DialDirectory = CreateDefaultDirectory();
+            if (settings.Profiles.Count == 0)
+                settings.Profiles = CreateDefaultProfiles();
             return settings;
         }
         catch
@@ -71,6 +75,12 @@ public sealed class AppSettings
             return false;
         }
     }
+
+    private static List<RetroComputerProfile> CreateDefaultProfiles() =>
+    [
+        new RetroComputerProfile { Name = "CoCo 3 / NetMate / 19200", BaudRate = 19200, DtrEnable = true, RtsEnable = true, EchoEnabled = false, TelnetFilteringEnabled = true, Notes = "Good starting profile for CoCo 3 with Deluxe RS-232 Pak and NetMate." },
+        new RetroComputerProfile { Name = "Generic 9600 8-N-1", BaudRate = 9600, DtrEnable = true, RtsEnable = true, EchoEnabled = false, TelnetFilteringEnabled = true, Notes = "Safe generic serial profile." }
+    ];
 
     private static List<BbsEntry> CreateDefaultDirectory() =>
     [

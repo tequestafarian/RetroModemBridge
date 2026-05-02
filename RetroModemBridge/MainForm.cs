@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Drawing.Drawing2D;
+using System.IO.Compression;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 
@@ -38,6 +39,13 @@ public sealed class MainForm : Form
     private readonly Button _importGuideButton = new();
     private readonly Button _importDirectoryButton = new();
     private readonly Button _exportDirectoryButton = new();
+    private readonly Button _testFavoritesButton = new();
+    private readonly Button _supportBundleButton = new();
+    private readonly Button _profilesButton = new();
+    private readonly Button _updateGuideButton = new();
+    private readonly Button _randomBbsButton = new();
+    private readonly TextBox _directorySearchText = new();
+    private readonly ComboBox _directoryFilterCombo = new();
     private readonly TextBox _logBox = new();
     private readonly Label _statusLabel = new();
     private readonly Label _lineStatusLabel = new();
@@ -73,7 +81,7 @@ public sealed class MainForm : Form
 private void InitializeComponent()
 {
     Text = "RetroModem Bridge v3 Beta";
-        Icon = AppIconHelper.LoadAppIcon();
+    Icon = AppIconHelper.LoadAppIcon();
     StartPosition = FormStartPosition.CenterScreen;
     MinimumSize = new Size(1180, 820);
     Size = new Size(1536, 966);
@@ -582,9 +590,10 @@ private Control BuildDirectoryGroup()
     {
         Dock = DockStyle.Fill,
         ColumnCount = 1,
-        RowCount = 4,
+        RowCount = 5,
         BackColor = Color.White
     };
+    root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
     root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
     root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
     root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
@@ -618,6 +627,11 @@ private Control BuildDirectoryGroup()
     _openTerminalButton.Text = "Open Selected in Terminal";
     _importDirectoryButton.Text = "Import Directory";
     _exportDirectoryButton.Text = "Export Directory";
+    _testFavoritesButton.Text = "Test All Favorites";
+    _supportBundleButton.Text = "Export Support Bundle";
+    _profilesButton.Text = "Profiles";
+    _updateGuideButton.Text = "Update / Merge BBS Guide";
+    _randomBbsButton.Text = "Random Favorite";
 
     StylePrimaryButton(_importGuideButton, Color.FromArgb(15, 104, 211), Color.FromArgb(12, 88, 178), 128, 34, 9.3F);
     StyleSecondaryButton(_addDirectoryButton, Color.White, Color.FromArgb(185, 190, 198), Color.FromArgb(45, 45, 45), 78, 34, 9.3F);
@@ -632,11 +646,18 @@ private Control BuildDirectoryGroup()
     var moreMenu = new ContextMenuStrip();
     moreMenu.Items.Add("Copy Dial Command", null, (_, _) => _copyDialCommandButton.PerformClick());
     moreMenu.Items.Add("Dial History", null, (_, _) => _historyButton.PerformClick());
+    moreMenu.Items.Add("Test All Favorites", null, (_, _) => _testFavoritesButton.PerformClick());
+    moreMenu.Items.Add("Random Favorite", null, (_, _) => _randomBbsButton.PerformClick());
+    moreMenu.Items.Add(new ToolStripSeparator());
+    moreMenu.Items.Add("Profiles", null, (_, _) => _profilesButton.PerformClick());
     moreMenu.Items.Add("First Time Setup", null, (_, _) => _setupWizardButton.PerformClick());
     moreMenu.Items.Add("Open Selected in Built-in Terminal", null, (_, _) => _openTerminalButton.PerformClick());
     moreMenu.Items.Add(new ToolStripSeparator());
+    moreMenu.Items.Add("Update / Merge BBS Guide", null, (_, _) => _updateGuideButton.PerformClick());
     moreMenu.Items.Add("Import Directory", null, (_, _) => _importDirectoryButton.PerformClick());
     moreMenu.Items.Add("Export Directory", null, (_, _) => _exportDirectoryButton.PerformClick());
+    moreMenu.Items.Add(new ToolStripSeparator());
+    moreMenu.Items.Add("Export Support Bundle", null, (_, _) => _supportBundleButton.PerformClick());
     _moreDirectoryButton.Click += (_, _) => moreMenu.Show(_moreDirectoryButton, new Point(0, _moreDirectoryButton.Height));
 
     foreach (var button in new[] { _importGuideButton, _sessionMirrorButton, _addDirectoryButton, _editDirectoryButton, _deleteDirectoryButton, _favoriteButton, _testConnectionButton, _moreDirectoryButton })
@@ -650,6 +671,50 @@ private Control BuildDirectoryGroup()
     _toolTips.SetToolTip(_moreDirectoryButton, "More directory tools, including import/export, setup, history, and the built-in terminal.");
 
     root.Controls.Add(toolbar, 0, 1);
+
+
+    var filterPanel = new FlowLayoutPanel
+    {
+        Dock = DockStyle.Top,
+        AutoSize = true,
+        FlowDirection = FlowDirection.LeftToRight,
+        WrapContents = false,
+        Margin = new Padding(0, 0, 0, 8),
+        BackColor = Color.White
+    };
+
+    var searchLabel = new Label
+    {
+        Text = "Search",
+        AutoSize = true,
+        Margin = new Padding(0, 7, 8, 0),
+        ForeColor = Color.FromArgb(80, 80, 80),
+        BackColor = Color.White
+    };
+
+    _directorySearchText.Width = 220;
+    _directorySearchText.Height = 30;
+    _directorySearchText.PlaceholderText = "name, alias, host, notes";
+
+    _directoryFilterCombo.DropDownStyle = ComboBoxStyle.DropDownList;
+    _directoryFilterCombo.Width = 170;
+    _directoryFilterCombo.Items.AddRange(new object[]
+    {
+        "All BBSes",
+        "Favorites only",
+        "Online only",
+        "Failed recently",
+        "ANSI only",
+        "Recently dialed"
+    });
+    _directoryFilterCombo.SelectedIndex = 0;
+
+    filterPanel.Controls.Add(searchLabel);
+    filterPanel.Controls.Add(_directorySearchText);
+    filterPanel.Controls.Add(new Label { Text = "Filter", AutoSize = true, Margin = new Padding(12, 7, 8, 0), ForeColor = Color.FromArgb(80, 80, 80), BackColor = Color.White });
+    filterPanel.Controls.Add(_directoryFilterCombo);
+    root.Controls.Add(filterPanel, 0, 2);
+
 
     _directoryGrid.Dock = DockStyle.Fill;
     _directoryGrid.AutoGenerateColumns = false;
@@ -687,12 +752,14 @@ private Control BuildDirectoryGroup()
         _directoryGrid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(BbsEntry.Category), HeaderText = "Category", Width = 120 });
         _directoryGrid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(BbsEntry.SystemType), HeaderText = "System", Width = 100 });
         _directoryGrid.Columns.Add(new DataGridViewCheckBoxColumn { DataPropertyName = nameof(BbsEntry.SupportsAnsi), HeaderText = "ANSI", Width = 55 });
-        _directoryGrid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(BbsEntry.LastResult), HeaderText = "Last result", Width = 120, ReadOnly = true });
+        _directoryGrid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(BbsEntry.LastResult), HeaderText = "Status", Width = 110, ReadOnly = true });
+        _directoryGrid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(BbsEntry.LastChecked), HeaderText = "Last checked", Width = 140, ReadOnly = true });
+        _directoryGrid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(BbsEntry.LastResponseMs), HeaderText = "ms", Width = 65, ReadOnly = true });
         _directoryGrid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(BbsEntry.Notes), HeaderText = "Notes", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill });
     }
     _directoryGrid.CellFormatting -= DirectoryGridOnCellFormatting;
     _directoryGrid.CellFormatting += DirectoryGridOnCellFormatting;
-    root.Controls.Add(_directoryGrid, 0, 2);
+    root.Controls.Add(_directoryGrid, 0, 3);
 
     var tip = new Label
     {
@@ -703,7 +770,7 @@ private Control BuildDirectoryGroup()
         Margin = new Padding(0, 14, 0, 0),
         BackColor = Color.White
     };
-    root.Controls.Add(tip, 0, 3);
+    root.Controls.Add(tip, 0, 4);
 
     return card;
 }
@@ -869,6 +936,13 @@ private static Control CreateFieldPanel(string labelText, Control field, Control
         _importGuideButton.Click += (_, _) => ImportFromTelnetBbsGuide();
         _importDirectoryButton.Click += (_, _) => ImportDirectory();
         _exportDirectoryButton.Click += (_, _) => ExportDirectory();
+        _testFavoritesButton.Click += async (_, _) => await TestAllFavoritesAsync();
+        _supportBundleButton.Click += (_, _) => ExportSupportBundle();
+        _profilesButton.Click += (_, _) => ShowProfiles();
+        _updateGuideButton.Click += async (_, _) => await UpdateBbsGuideFromAppAsync();
+        _randomBbsButton.Click += (_, _) => SelectRandomFavorite();
+        _directorySearchText.TextChanged += (_, _) => ApplyDirectoryFilter();
+        _directoryFilterCombo.SelectedIndexChanged += (_, _) => ApplyDirectoryFilter();
         _comPortCombo.SelectedIndexChanged += (_, _) => SaveComPortPreference();
         _rememberComPortCheck.CheckedChanged += (_, _) => SaveComPortPreference();
         _startupSoundCheck.CheckedChanged += (_, _) => SaveStartupSoundPreference();
@@ -1022,6 +1096,8 @@ private static Control CreateFieldPanel(string labelText, Control field, Control
                 IsFavorite = e.IsFavorite,
                 LastDialed = e.LastDialed,
                 LastResult = e.LastResult.Trim(),
+                LastChecked = e.LastChecked,
+                LastResponseMs = e.LastResponseMs,
                 Notes = e.Notes.Trim()
             })
             .ToList();
@@ -1168,6 +1244,13 @@ private void ApplyBridgeButtonColors(bool running)
         _openTerminalButton.Enabled = true;
         _importGuideButton.Enabled = !running;
         _importDirectoryButton.Enabled = !running;
+        _testFavoritesButton.Enabled = true;
+        _supportBundleButton.Enabled = true;
+        _profilesButton.Enabled = !running;
+        _updateGuideButton.Enabled = !running;
+        _randomBbsButton.Enabled = true;
+        _directorySearchText.Enabled = true;
+        _directoryFilterCombo.Enabled = true;
     }
 
     private void UpdateStatusDisplays()
@@ -1199,6 +1282,58 @@ private void ApplyBridgeButtonColors(bool running)
     private void SetLight(string name, bool on)
     {
         _lightsPanel.SetLight(name, on);
+    }
+
+
+    private void ApplyDirectoryFilter()
+    {
+        if (_directoryGrid.Rows.Count == 0)
+            return;
+
+        try
+        {
+            CurrencyManager? manager = null;
+            if (_directoryGrid.BindingContext[_directory] is CurrencyManager cm)
+            {
+                manager = cm;
+                manager.SuspendBinding();
+            }
+
+            var search = _directorySearchText.Text.Trim();
+            var filter = _directoryFilterCombo.SelectedItem?.ToString() ?? "All BBSes";
+
+            foreach (DataGridViewRow row in _directoryGrid.Rows)
+            {
+                if (row.DataBoundItem is not BbsEntry entry)
+                    continue;
+
+                var matchesSearch = string.IsNullOrWhiteSpace(search) ||
+                    entry.Alias.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                    entry.Name.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                    entry.Host.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                    entry.Category.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                    entry.SystemType.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                    entry.Notes.Contains(search, StringComparison.OrdinalIgnoreCase);
+
+                var matchesFilter = filter switch
+                {
+                    "Favorites only" => entry.IsFavorite,
+                    "Online only" => entry.LastResult.Contains("Online", StringComparison.OrdinalIgnoreCase) || entry.LastResult.Contains("Connected", StringComparison.OrdinalIgnoreCase),
+                    "Failed recently" => !string.IsNullOrWhiteSpace(entry.LastResult) && !entry.LastResult.Contains("Online", StringComparison.OrdinalIgnoreCase) && !entry.LastResult.Contains("Connected", StringComparison.OrdinalIgnoreCase),
+                    "ANSI only" => entry.SupportsAnsi,
+                    "Recently dialed" => entry.LastDialed is not null,
+                    _ => true
+                };
+
+                row.Visible = matchesSearch && matchesFilter;
+            }
+
+            manager?.ResumeBinding();
+        }
+        catch
+        {
+            // Filtering is a convenience feature. Do not let it interfere with bridge use.
+        }
     }
 
     private void ShowSessionMirror()
@@ -1244,22 +1379,65 @@ private void ApplyBridgeButtonColors(bool running)
             return;
         }
 
+        await TestOneEntryAsync(entry, showMessage: true);
+    }
+
+    private async Task TestOneEntryAsync(BbsEntry entry, bool showMessage)
+    {
         var port = entry.Port < 1 || entry.Port > 65535 ? 23 : entry.Port;
         AddLog($"Testing {entry.Host}:{port}...");
         _testConnectionButton.Enabled = false;
 
         try
         {
-            var result = await ConnectionTester.TestAsync(entry.Host, port);
-            entry.LastResult = result;
+            var result = await ConnectionTester.TestDetailedAsync(entry.Host, port);
+            entry.LastResult = result.Result;
+            entry.LastChecked = result.CheckedAt;
+            entry.LastResponseMs = result.ResponseMs;
             _directoryGrid.Refresh();
+            ApplyDirectoryFilter();
             SaveSettingsFromUi();
-            AddLog($"Connection test for {entry.Host}:{port}: {result}");
-            MessageBox.Show(this, $"{entry.DisplayName}\n{entry.Host}:{port}\n\nResult: {result}", "Connection test", MessageBoxButtons.OK, MessageBoxIcon.Information);
+
+            var ms = result.ResponseMs is null ? "" : $" ({result.ResponseMs} ms)";
+            AddLog($"Connection test for {entry.Host}:{port}: {result.Result}{ms}");
+
+            if (showMessage)
+                MessageBox.Show(this, $"{entry.DisplayName}\n{entry.Host}:{port}\n\nResult: {result.Result}{ms}", "Connection test", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
         finally
         {
             _testConnectionButton.Enabled = true;
+        }
+    }
+
+    private async Task TestAllFavoritesAsync()
+    {
+        var favorites = _directory.Where(e => e.IsFavorite && !string.IsNullOrWhiteSpace(e.Host)).ToList();
+        if (favorites.Count == 0)
+        {
+            MessageBox.Show(this, "No favorites to test yet. Mark some BBSes as favorites first.", "Test favorites", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var confirm = MessageBox.Show(this, $"Test {favorites.Count} favorite BBS entr{(favorites.Count == 1 ? "y" : "ies")} now?", "Test all favorites", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+        if (confirm != DialogResult.Yes)
+            return;
+
+        _testConnectionButton.Enabled = false;
+        _testFavoritesButton.Enabled = false;
+
+        try
+        {
+            foreach (var entry in favorites)
+                await TestOneEntryAsync(entry, showMessage: false);
+
+            SaveSettingsFromUi();
+            MessageBox.Show(this, $"Finished testing {favorites.Count} favorite BBS entr{(favorites.Count == 1 ? "y" : "ies")}.", "Test all favorites", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        finally
+        {
+            _testConnectionButton.Enabled = true;
+            _testFavoritesButton.Enabled = true;
         }
     }
 
@@ -1337,17 +1515,233 @@ private void ApplyBridgeButtonColors(bool running)
     private void ShowBeginnerSetupWizard()
     {
         var message =
-            "RetroModem Bridge beginner setup\n\n" +
+            "RetroModem Bridge first-time setup checklist\n\n" +
             "1. Connect your retro computer serial cable to this Windows PC.\n" +
-            "2. Pick the matching COM port and baud rate. For a CoCo 3, try 9600 or 19200.\n" +
-            "3. Leave DTR and RTS on unless your adapter behaves strangely.\n" +
-            "4. Turn Echo on only if your terminal does not show what you type.\n" +
-            "5. Click Start Bridge.\n" +
-            "6. On the retro terminal, type AT and press Enter. You should see OK.\n" +
-            "7. Try ATDT HELP, ATDT TIME, ATDT BBSLIST, or a saved alias like ATDT coco.\n\n" +
-            "Tip: Use Test to check a BBS from Windows before dialing it from the vintage computer.";
+            "2. Choose the matching COM port.\n" +
+            "3. Pick a baud rate. For a CoCo 3 with NetMate, try 19200. If that fails, try 9600.\n" +
+            "4. Leave DTR and RTS on unless your adapter behaves strangely.\n" +
+            "5. Leave Telnet Filter on for most Telnet BBSes.\n" +
+            "6. Click Start Bridge.\n" +
+            "7. On the retro terminal, type AT and press Enter. You should see OK.\n" +
+            "8. Click Import Guide to add BBSes, then mark a few as Favorites.\n" +
+            "9. Use Test or Test All Favorites to find working boards.\n" +
+            "10. Try ATDT MENU from the retro computer.\n\n" +
+            "Useful commands:\n" +
+            "ATDT HELP, ATDT TIME, ATDT MENU, ATDT NEWS, ATDT RANDOM, ATDT FAVORITES\n\n" +
+            "Tip: Open Mirror to see the session from Windows. Enable Input if you want to type from the app.";
 
-        MessageBox.Show(this, message, "Beginner setup", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        MessageBox.Show(this, message, "First Time Setup", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
+    private void SelectRandomFavorite()
+    {
+        var candidates = _directory
+            .Where(e => e.IsFavorite && !string.IsNullOrWhiteSpace(e.Host))
+            .ToList();
+
+        if (candidates.Count == 0)
+        {
+            MessageBox.Show(this, "No favorite BBSes yet. Mark a few entries as favorites first.", "Random favorite", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var entry = candidates[Random.Shared.Next(candidates.Count)];
+        foreach (DataGridViewRow row in _directoryGrid.Rows)
+        {
+            if (ReferenceEquals(row.DataBoundItem, entry))
+            {
+                row.Visible = true;
+                row.Selected = true;
+                _directoryGrid.CurrentCell = row.Cells[Math.Min(1, row.Cells.Count - 1)];
+                break;
+            }
+        }
+
+        var command = "ATDT" + entry.Alias.Trim();
+        Clipboard.SetText(command);
+        AddLog("Random favorite selected: " + entry.DisplayName + " (" + command + ")");
+        MessageBox.Show(this, $"{entry.DisplayName}\n{entry.Host}:{entry.Port}\n\nCopied dial command: {command}", "Random favorite", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
+    private void ShowProfiles()
+    {
+        using var form = new Form
+        {
+            Text = "Retro Computer Profiles",
+            StartPosition = FormStartPosition.CenterParent,
+            Size = new Size(860, 460),
+            Font = Font
+        };
+
+        var root = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 3,
+            Padding = new Padding(12)
+        };
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        form.Controls.Add(root);
+
+        var help = new Label
+        {
+            Text = "Profiles save common serial settings for different retro computers or terminal programs.",
+            AutoSize = true,
+            Margin = new Padding(0, 0, 0, 8)
+        };
+        root.Controls.Add(help, 0, 0);
+
+        var grid = new DataGridView
+        {
+            Dock = DockStyle.Fill,
+            AutoGenerateColumns = false,
+            AllowUserToAddRows = true,
+            AllowUserToDeleteRows = true,
+            RowHeadersVisible = false,
+            SelectionMode = DataGridViewSelectionMode.FullRowSelect,
+            BackgroundColor = Color.White
+        };
+
+        grid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(RetroComputerProfile.Name), HeaderText = "Profile", Width = 180 });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(RetroComputerProfile.ComPort), HeaderText = "COM", Width = 90 });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(RetroComputerProfile.BaudRate), HeaderText = "Baud", Width = 90 });
+        grid.Columns.Add(new DataGridViewCheckBoxColumn { DataPropertyName = nameof(RetroComputerProfile.DtrEnable), HeaderText = "DTR", Width = 50 });
+        grid.Columns.Add(new DataGridViewCheckBoxColumn { DataPropertyName = nameof(RetroComputerProfile.RtsEnable), HeaderText = "RTS", Width = 50 });
+        grid.Columns.Add(new DataGridViewCheckBoxColumn { DataPropertyName = nameof(RetroComputerProfile.EchoEnabled), HeaderText = "Echo", Width = 60 });
+        grid.Columns.Add(new DataGridViewCheckBoxColumn { DataPropertyName = nameof(RetroComputerProfile.TelnetFilteringEnabled), HeaderText = "Telnet", Width = 70 });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { DataPropertyName = nameof(RetroComputerProfile.Notes), HeaderText = "Notes", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill });
+
+        var profiles = new BindingList<RetroComputerProfile>(_settings.Profiles);
+        grid.DataSource = profiles;
+        root.Controls.Add(grid, 0, 1);
+
+        var buttons = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            FlowDirection = FlowDirection.RightToLeft,
+            Margin = new Padding(0, 10, 0, 0)
+        };
+
+        var closeButton = new Button { Text = "Close", Width = 90, Height = 34 };
+        var applyButton = new Button { Text = "Apply Selected", Width = 130, Height = 34 };
+        var saveCurrentButton = new Button { Text = "Save Current as Profile", Width = 170, Height = 34 };
+
+        closeButton.Click += (_, _) => form.Close();
+
+        saveCurrentButton.Click += (_, _) =>
+        {
+            var profile = new RetroComputerProfile
+            {
+                Name = "New profile " + DateTime.Now.ToString("HHmm"),
+                ComPort = GetSelectedPortName(),
+                BaudRate = int.TryParse(_baudCombo.SelectedItem?.ToString(), out var baud) ? baud : 19200,
+                DtrEnable = _dtrCheck.Checked,
+                RtsEnable = _rtsCheck.Checked,
+                EchoEnabled = _echoCheck.Checked,
+                TelnetFilteringEnabled = _telnetFilterCheck.Checked,
+                Notes = "Saved from current settings."
+            };
+
+            profiles.Add(profile);
+            grid.Refresh();
+        };
+
+        applyButton.Click += (_, _) =>
+        {
+            if (grid.CurrentRow?.DataBoundItem is not RetroComputerProfile profile)
+                return;
+
+            SelectPort(profile.ComPort);
+            _baudCombo.SelectedItem = profile.BaudRate.ToString();
+            _dtrCheck.Checked = profile.DtrEnable;
+            _rtsCheck.Checked = profile.RtsEnable;
+            _echoCheck.Checked = profile.EchoEnabled;
+            _telnetFilterCheck.Checked = profile.TelnetFilteringEnabled;
+            AddLog("Applied profile: " + profile.Name);
+            SaveSettingsFromUi();
+            MessageBox.Show(this, "Applied profile: " + profile.Name, "Profiles", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        };
+
+        buttons.Controls.Add(closeButton);
+        buttons.Controls.Add(applyButton);
+        buttons.Controls.Add(saveCurrentButton);
+        root.Controls.Add(buttons, 0, 2);
+
+        form.FormClosing += (_, _) =>
+        {
+            _settings.Profiles = profiles.ToList();
+            _settings.Save();
+        };
+
+        form.ShowDialog(this);
+    }
+
+    private void ExportSupportBundle()
+    {
+        using var dialog = new SaveFileDialog
+        {
+            Filter = "ZIP files (*.zip)|*.zip|All files (*.*)|*.*",
+            FileName = $"RetroModemBridge-support-{DateTime.Now:yyyyMMdd-HHmmss}.zip"
+        };
+
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+            return;
+
+        try
+        {
+            var tempDir = Path.Combine(Path.GetTempPath(), "RetroModemBridgeSupport-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDir);
+
+            var info = new
+            {
+                App = "RetroModem Bridge",
+                Version = "v3.0-beta.3",
+                GeneratedAt = DateTime.Now,
+                OS = Environment.OSVersion.ToString(),
+                Is64BitOS = Environment.Is64BitOperatingSystem,
+                DotNet = Environment.Version.ToString(),
+                BaseDirectory = AppContext.BaseDirectory,
+                SettingsPath = AppSettings.SettingsPath,
+                SelectedPort = GetSelectedPortName(),
+                BaudRate = _baudCombo.SelectedItem?.ToString(),
+                Dtr = _dtrCheck.Checked,
+                Rts = _rtsCheck.Checked,
+                Echo = _echoCheck.Checked,
+                TelnetFilter = _telnetFilterCheck.Checked,
+                LineStatus = _bridge.GetLineStatusText(),
+                Traffic = _bridge.GetTrafficText()
+            };
+
+            File.WriteAllText(Path.Combine(tempDir, "system-info.json"), JsonSerializer.Serialize(info, new JsonSerializerOptions { WriteIndented = true }));
+            File.WriteAllText(Path.Combine(tempDir, "live-log.txt"), _logBox.Text);
+            File.WriteAllText(Path.Combine(tempDir, "bbs-directory.json"), JsonSerializer.Serialize(GetCleanDirectory(), new JsonSerializerOptions { WriteIndented = true }));
+            File.WriteAllText(Path.Combine(tempDir, "dial-history.json"), JsonSerializer.Serialize(_settings.DialHistory.Take(500).ToList(), new JsonSerializerOptions { WriteIndented = true }));
+            File.WriteAllText(Path.Combine(tempDir, "com-ports.txt"), string.Join(Environment.NewLine, SerialPortDiscovery.GetPorts().Select(p => p?.ToString() ?? string.Empty)));
+
+            var readme =
+                "RetroModem Bridge Support Bundle" + Environment.NewLine +
+                "Generated: " + DateTime.Now + Environment.NewLine + Environment.NewLine +
+                "Includes system-info.json, live-log.txt, bbs-directory.json, dial-history.json, and com-ports.txt." + Environment.NewLine +
+                "Review before sharing publicly." + Environment.NewLine;
+
+            File.WriteAllText(Path.Combine(tempDir, "README.txt"), readme);
+
+            if (File.Exists(dialog.FileName))
+                File.Delete(dialog.FileName);
+
+            ZipFile.CreateFromDirectory(tempDir, dialog.FileName, CompressionLevel.Optimal, false);
+            Directory.Delete(tempDir, recursive: true);
+
+            AddLog("Support bundle exported to " + dialog.FileName);
+            MessageBox.Show(this, "Support bundle exported successfully.", "Export Support Bundle", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Could not export support bundle", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
     }
 
     private void CopyDialCommand()
@@ -1429,9 +1823,191 @@ private void ApplyBridgeButtonColors(bool running)
         AddLog(entries.Count == 1 ? "Deleted BBS directory entry." : $"Deleted {entries.Count} BBS directory entries.");
     }
 
+    private async Task UpdateBbsGuideFromAppAsync()
+    {
+        using var form = new Form
+        {
+            Text = "Update Telnet BBS Guide",
+            Icon = AppIconHelper.LoadAppIcon(),
+            StartPosition = FormStartPosition.CenterParent,
+            Size = new Size(560, 330),
+            MinimumSize = new Size(560, 330),
+            Font = Font
+        };
+
+        var root = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 4,
+            Padding = new Padding(16)
+        };
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        form.Controls.Add(root);
+
+        root.Controls.Add(new Label
+        {
+            Text = "Update the local Telnet BBS Guide used by the Import Guide and retro-side ATDT GUIDE browser.",
+            AutoSize = true,
+            MaximumSize = new Size(500, 0),
+            Margin = new Padding(0, 0, 0, 10)
+        }, 0, 0);
+
+        var statusLabel = new Label
+        {
+            Text = TelnetBbsGuideUpdater.GetStatusText(),
+            AutoSize = true,
+            MaximumSize = new Size(500, 0),
+            ForeColor = Color.DimGray,
+            Margin = new Padding(0, 0, 0, 10)
+        };
+        root.Controls.Add(statusLabel, 0, 1);
+
+        var progress = new ProgressBar
+        {
+            Dock = DockStyle.Top,
+            Height = 24,
+            Minimum = 0,
+            Maximum = 100,
+            Value = 0,
+            Margin = new Padding(0, 0, 0, 8)
+        };
+
+        var progressLabel = new Label
+        {
+            Text = "Choose an update source below.",
+            AutoSize = true,
+            MaximumSize = new Size(500, 0),
+            ForeColor = Color.FromArgb(60, 60, 60)
+        };
+
+        var middle = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 2
+        };
+        middle.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        middle.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        middle.Controls.Add(progress, 0, 0);
+        middle.Controls.Add(progressLabel, 0, 1);
+        root.Controls.Add(middle, 0, 2);
+
+        var buttons = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Bottom,
+            AutoSize = true,
+            FlowDirection = FlowDirection.RightToLeft,
+            WrapContents = false,
+            Margin = new Padding(0, 12, 0, 0)
+        };
+
+        var closeButton = new Button { Text = "Close", Width = 90, Height = 34 };
+        var dailyButton = new Button { Text = "Download Daily", Width = 125, Height = 34 };
+        var monthlyButton = new Button { Text = "Download Monthly", Width = 140, Height = 34 };
+        var loadFileButton = new Button { Text = "Load ZIP/CSV", Width = 115, Height = 34 };
+
+        closeButton.Click += (_, _) => form.Close();
+
+        async Task RunDownloadAsync(GuideDownloadKind kind)
+        {
+            monthlyButton.Enabled = false;
+            dailyButton.Enabled = false;
+            loadFileButton.Enabled = false;
+            closeButton.Enabled = false;
+            progress.Value = 0;
+
+            try
+            {
+                var progressReporter = new Progress<string>(status =>
+                {
+                    var parts = status.Split('|', 2);
+                    if (parts.Length == 2 && int.TryParse(parts[0], out var percent))
+                    {
+                        progress.Value = Math.Max(progress.Minimum, Math.Min(progress.Maximum, percent));
+                        progressLabel.Text = parts[1];
+                    }
+                    else
+                    {
+                        progressLabel.Text = status;
+                    }
+                });
+
+                var result = await TelnetBbsGuideUpdater.DownloadAndInstallAsync(kind, progressReporter);
+                statusLabel.Text = TelnetBbsGuideUpdater.GetStatusText();
+                progress.Value = 100;
+                progressLabel.Text = result.Message;
+                AddLog("Updated Telnet BBS Guide: " + result.Message);
+                MessageBox.Show(form, result.Message, "Guide updated", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                progressLabel.Text = "Update failed.";
+                AddLog("Guide update failed: " + ex.Message);
+                MessageBox.Show(form, ex.Message + "\n\nIf the site blocks automated downloads, download the ZIP in your browser and use Load ZIP/CSV.", "Guide update failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                monthlyButton.Enabled = true;
+                dailyButton.Enabled = true;
+                loadFileButton.Enabled = true;
+                closeButton.Enabled = true;
+            }
+        }
+
+        monthlyButton.Click += async (_, _) => await RunDownloadAsync(GuideDownloadKind.Monthly);
+        dailyButton.Click += async (_, _) => await RunDownloadAsync(GuideDownloadKind.Daily);
+
+        loadFileButton.Click += (_, _) =>
+        {
+            using var dialog = new OpenFileDialog
+            {
+                Filter = "Telnet BBS Guide ZIP/CSV (*.zip;*.csv)|*.zip;*.csv|ZIP files (*.zip)|*.zip|CSV files (*.csv)|*.csv|All files (*.*)|*.*"
+            };
+
+            if (dialog.ShowDialog(form) != DialogResult.OK)
+                return;
+
+            try
+            {
+                progress.Value = 50;
+                progressLabel.Text = "Installing selected file...";
+
+                GuideUpdateResult result;
+                if (Path.GetExtension(dialog.FileName).Equals(".zip", StringComparison.OrdinalIgnoreCase))
+                    result = TelnetBbsGuideUpdater.InstallZip(dialog.FileName, GuideDownloadKind.Monthly, "Manual file", null);
+                else
+                    result = TelnetBbsGuideUpdater.InstallCsv(dialog.FileName, GuideDownloadKind.Monthly, "Manual file", null);
+
+                progress.Value = 100;
+                statusLabel.Text = TelnetBbsGuideUpdater.GetStatusText();
+                progressLabel.Text = result.Message;
+                AddLog("Installed Telnet BBS Guide from file: " + dialog.FileName);
+                MessageBox.Show(form, result.Message, "Guide installed", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                progressLabel.Text = "Install failed.";
+                AddLog("Manual guide install failed: " + ex.Message);
+                MessageBox.Show(form, ex.Message, "Could not install guide", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        };
+
+        buttons.Controls.Add(closeButton);
+        buttons.Controls.Add(dailyButton);
+        buttons.Controls.Add(monthlyButton);
+        buttons.Controls.Add(loadFileButton);
+        root.Controls.Add(buttons, 0, 3);
+
+        form.ShowDialog(this);
+    }
+
     private void ImportFromTelnetBbsGuide()
     {
-        using var dialog = new BbsGuideImportForm();
+        using var dialog = new BbsGuideImportForm(GetCleanDirectory());
         if (dialog.ShowDialog(this) != DialogResult.OK)
             return;
 

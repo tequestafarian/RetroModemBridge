@@ -1,0 +1,8 @@
+Beta 3 compile fix
+
+Fixed:
+- ModemBridge.cs duplicate switch case label "F".
+  Favorites already uses F, so Featured/Random now uses 7, FEATURED, or RANDOM.
+
+Also adjusted:
+- Support bundle COM port list nullability warning.

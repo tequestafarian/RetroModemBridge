@@ -7,6 +7,7 @@ public sealed class BbsGuideImportForm : Form
 {
     private readonly TextBox _searchText = new();
     private readonly ComboBox _softwareFilter = new();
+    private readonly ComboBox _guideFilter = new();
     private readonly DataGridView _grid = new();
     private readonly Label _sourceLabel = new();
     private readonly Label _countLabel = new();
@@ -17,11 +18,17 @@ public sealed class BbsGuideImportForm : Form
     private readonly Button _closeButton = new();
     private readonly BindingList<BbsGuideEntry> _visibleEntries = new();
     private List<BbsGuideEntry> _allEntries = [];
+    private readonly HashSet<string> _existingDirectoryKeys;
 
     public IReadOnlyList<BbsGuideEntry> SelectedEntries { get; private set; } = [];
 
-    public BbsGuideImportForm()
+    public BbsGuideImportForm(IEnumerable<BbsEntry>? existingDirectory = null)
     {
+        _existingDirectoryKeys = (existingDirectory ?? Array.Empty<BbsEntry>())
+            .Where(e => !string.IsNullOrWhiteSpace(e.Host))
+            .Select(e => $"{e.Host.Trim().ToLowerInvariant()}:{e.Port}")
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
         InitializeComponent();
         WireEvents();
         LoadBuiltInList();
@@ -91,7 +98,7 @@ public sealed class BbsGuideImportForm : Form
         {
             AutoSize = true,
             Dock = DockStyle.Top,
-            ColumnCount = 4,
+            ColumnCount = 6,
             RowCount = 2,
             Margin = new Padding(0, 0, 0, 8)
         };
@@ -99,6 +106,8 @@ public sealed class BbsGuideImportForm : Form
         filterPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         filterPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         filterPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 210));
+        filterPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        filterPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 190));
         filterPanel.Controls.Add(CreateLabel("Search"), 0, 0);
         _searchText.Dock = DockStyle.Fill;
         filterPanel.Controls.Add(_searchText, 1, 0);
@@ -106,8 +115,14 @@ public sealed class BbsGuideImportForm : Form
         _softwareFilter.DropDownStyle = ComboBoxStyle.DropDownList;
         _softwareFilter.Dock = DockStyle.Fill;
         filterPanel.Controls.Add(_softwareFilter, 3, 0);
+        filterPanel.Controls.Add(CreateLabel("Guide filter"), 4, 0);
+        _guideFilter.DropDownStyle = ComboBoxStyle.DropDownList;
+        _guideFilter.Dock = DockStyle.Fill;
+        _guideFilter.Items.AddRange(new object[] { "All guide entries", "New only", "Already in directory" });
+        _guideFilter.SelectedIndex = 1;
+        filterPanel.Controls.Add(_guideFilter, 5, 0);
         _sourceLabel.AutoSize = true;
-        filterPanel.SetColumnSpan(_sourceLabel, 4);
+        filterPanel.SetColumnSpan(_sourceLabel, 6);
         filterPanel.Controls.Add(_sourceLabel, 0, 1);
         root.Controls.Add(filterPanel, 0, 3);
 
@@ -167,6 +182,7 @@ public sealed class BbsGuideImportForm : Form
         _downloadPageButton.Click += (_, _) => OpenDownloadPage();
         _searchText.TextChanged += (_, _) => ApplyFilters();
         _softwareFilter.SelectedIndexChanged += (_, _) => ApplyFilters();
+        _guideFilter.SelectedIndexChanged += (_, _) => ApplyFilters();
         _addSelectedButton.Click += (_, _) => AddSelectedAndClose();
         _closeButton.Click += (_, _) => Close();
         _grid.CellDoubleClick += (_, _) => ToggleCurrentSelection();
@@ -176,11 +192,11 @@ public sealed class BbsGuideImportForm : Form
     {
         try
         {
-            _allEntries = BbsGuideParser.LoadBundledList();
+            _allEntries = BbsGuideParser.LoadCurrentList();
             foreach (var entry in _allEntries)
                 entry.Selected = false;
             PopulateSoftwareFilter();
-            _sourceLabel.Text = "Source: bundled bbslist.csv from The Telnet & Dial-Up BBS Guide, https://www.telnetbbsguide.com/";
+            _sourceLabel.Text = "Source: " + TelnetBbsGuideUpdater.GetStatusText();
             ApplyFilters();
         }
         catch (Exception ex)
@@ -225,11 +241,17 @@ public sealed class BbsGuideImportForm : Form
         _softwareFilter.SelectedItem = !string.IsNullOrWhiteSpace(current) && _softwareFilter.Items.Contains(current) ? current : "All";
     }
 
+    private bool IsAlreadyInDirectory(BbsGuideEntry entry)
+    {
+        return _existingDirectoryKeys.Contains($"{entry.Host.Trim().ToLowerInvariant()}:{entry.Port}");
+    }
+
     private void ApplyFilters()
     {
         _grid.EndEdit();
         var query = _searchText.Text.Trim();
         var software = _softwareFilter.SelectedItem?.ToString() ?? "All";
+        var guideFilter = _guideFilter.SelectedItem?.ToString() ?? "New only";
         IEnumerable<BbsGuideEntry> filtered = _allEntries;
 
         if (!string.IsNullOrWhiteSpace(query))
@@ -244,13 +266,20 @@ public sealed class BbsGuideImportForm : Form
         if (!string.Equals(software, "All", StringComparison.OrdinalIgnoreCase))
             filtered = filtered.Where(e => string.Equals(e.Software, software, StringComparison.OrdinalIgnoreCase));
 
+        if (string.Equals(guideFilter, "New only", StringComparison.OrdinalIgnoreCase))
+            filtered = filtered.Where(e => !IsAlreadyInDirectory(e));
+        else if (string.Equals(guideFilter, "Already in directory", StringComparison.OrdinalIgnoreCase))
+            filtered = filtered.Where(IsAlreadyInDirectory);
+
         _visibleEntries.RaiseListChangedEvents = false;
         _visibleEntries.Clear();
         foreach (var entry in filtered.Take(500))
             _visibleEntries.Add(entry);
         _visibleEntries.RaiseListChangedEvents = true;
         _visibleEntries.ResetBindings();
-        _countLabel.Text = $"Showing {_visibleEntries.Count} of {_allEntries.Count} Telnet entries. Check boxes or highlight rows, then add them to your dial alias directory.";
+        var newCount = _allEntries.Count(e => !IsAlreadyInDirectory(e));
+        var alreadyCount = _allEntries.Count - newCount;
+        _countLabel.Text = $"Showing {_visibleEntries.Count} of {_allEntries.Count} guide entries. New: {newCount}. Already in directory: {alreadyCount}. Check boxes or highlight rows, then add them.";
     }
 
     private void ToggleCurrentSelection()

@@ -12,6 +12,8 @@ public sealed class BbsEntry
     public bool IsFavorite { get; set; }
     public DateTime? LastDialed { get; set; }
     public string LastResult { get; set; } = string.Empty;
+    public DateTime? LastChecked { get; set; }
+    public int? LastResponseMs { get; set; }
     public string Notes { get; set; } = string.Empty;
 
     public string DialTarget => $"{Host}:{Port}";

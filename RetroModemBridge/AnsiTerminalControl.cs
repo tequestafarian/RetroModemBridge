@@ -14,7 +14,7 @@ public sealed class AnsiTerminalControl : Control
     }
 
     private const int Columns = 80;
-    private const int Rows = 25;
+    private const int Rows = 24;
 
     private readonly Cell[,] _screen = new Cell[Rows, Columns];
     private readonly StringBuilder _sequence = new();
@@ -241,48 +241,40 @@ public sealed class AnsiTerminalControl : Control
             Trimming = StringTrimming.None
         };
 
-        // Draw text in runs instead of one cell at a time. Drawing individual
-        // characters can clip the right side of wide glyphs. Runs let normal
-        // words render naturally while still keeping the 80x25 ANSI grid.
+        // Draw text one fixed cell at a time.
+        // This is more important for the Session Mirror than natural Windows text
+        // rendering because the goal is to match the retro terminal's 80-column grid.
         for (var row = 0; row < Rows; row++)
         {
-            var col = 0;
-            while (col < Columns)
+            for (var col = 0; col < Columns; col++)
             {
                 var cell = _screen[row, col];
                 if (cell.Ch == ' ' || IsCellGraphic(cell.Ch))
-                {
-                    col++;
                     continue;
-                }
 
                 var fore = cell.Bold ? Brighten(cell.Fore) : cell.Fore;
-                var back = cell.Back;
-                var bold = cell.Bold;
-                var runStart = col;
-                var chars = new List<char>();
-
-                while (col < Columns)
-                {
-                    var current = _screen[row, col];
-                    var currentFore = current.Bold ? Brighten(current.Fore) : current.Fore;
-                    if (current.Ch == ' ' || IsCellGraphic(current.Ch) || currentFore.ToArgb() != fore.ToArgb() || current.Back.ToArgb() != back.ToArgb() || current.Bold != bold)
-                        break;
-
-                    chars.Add(current.Ch);
-                    col++;
-                }
-
-                var x = runStart * cellW;
+                var x = col * cellW;
                 var y = row * cellH;
                 var drawRect = new RectangleF(
                     x,
+                    y,
+                    cellW,
+                    cellH);
+
+                if (IsBoxDrawing(cell.Ch))
+                {
+                    DrawBoxDrawingCell(g, cell.Ch, drawRect, fore);
+                    continue;
+                }
+
+                drawRect = new RectangleF(
+                    x - 1.5F,
                     y - 1,
-                    Math.Max(cellW, chars.Count * cellW + 24),
+                    cellW + 5,
                     cellH + 4);
 
                 using var brush = new SolidBrush(fore);
-                g.DrawString(new string(chars.ToArray()), _terminalFont, brush, drawRect, format);
+                g.DrawString(cell.Ch.ToString(), _terminalFont, brush, drawRect, format);
             }
         }
 
@@ -911,6 +903,133 @@ public sealed class AnsiTerminalControl : Control
             7 => bright ? Color.White : Color.Silver,
             _ => Color.Silver
         };
+    }
+
+
+    private static bool IsBoxDrawing(char ch)
+    {
+        return ch is
+            '─' or '│' or '┌' or '┐' or '└' or '┘' or '├' or '┤' or '┬' or '┴' or '┼' or
+            '═' or '║' or '╔' or '╗' or '╚' or '╝' or '╠' or '╣' or '╦' or '╩' or '╬' or
+            '╒' or '╕' or '╘' or '╛' or '╞' or '╡' or '╤' or '╧' or '╪' or
+            '╓' or '╖' or '╙' or '╜' or '╟' or '╢' or '╥' or '╨' or '╫';
+    }
+
+    private static void DrawBoxDrawingCell(Graphics g, char ch, RectangleF rect, Color color)
+    {
+        using var pen = new Pen(color, Math.Max(1.35F, rect.Height / 11F))
+        {
+            StartCap = System.Drawing.Drawing2D.LineCap.Square,
+            EndCap = System.Drawing.Drawing2D.LineCap.Square
+        };
+
+        var left = rect.Left - 1.0F;
+        var right = rect.Right + 1.0F;
+        var top = rect.Top - 0.75F;
+        var bottom = rect.Bottom + 0.75F;
+        var midX = rect.Left + rect.Width / 2F;
+        var midY = rect.Top + rect.Height / 2F;
+
+        void H() => g.DrawLine(pen, left, midY, right, midY);
+        void V() => g.DrawLine(pen, midX, top, midX, bottom);
+        void L() => g.DrawLine(pen, left, midY, midX, midY);
+        void R() => g.DrawLine(pen, midX, midY, right, midY);
+        void U() => g.DrawLine(pen, midX, top, midX, midY);
+        void D() => g.DrawLine(pen, midX, midY, midX, bottom);
+
+        switch (ch)
+        {
+            case '─':
+            case '═':
+                H();
+                break;
+
+            case '│':
+            case '║':
+                V();
+                break;
+
+            case '┌':
+            case '╔':
+            case '╒':
+            case '╓':
+                R();
+                D();
+                break;
+
+            case '┐':
+            case '╗':
+            case '╕':
+            case '╖':
+                L();
+                D();
+                break;
+
+            case '└':
+            case '╚':
+            case '╘':
+            case '╙':
+                R();
+                U();
+                break;
+
+            case '┘':
+            case '╝':
+            case '╛':
+            case '╜':
+                L();
+                U();
+                break;
+
+            case '├':
+            case '╠':
+            case '╞':
+            case '╟':
+                U();
+                D();
+                R();
+                break;
+
+            case '┤':
+            case '╣':
+            case '╡':
+            case '╢':
+                U();
+                D();
+                L();
+                break;
+
+            case '┬':
+            case '╦':
+            case '╤':
+            case '╥':
+                L();
+                R();
+                D();
+                break;
+
+            case '┴':
+            case '╩':
+            case '╧':
+            case '╨':
+                L();
+                R();
+                U();
+                break;
+
+            case '┼':
+            case '╬':
+            case '╪':
+            case '╫':
+                H();
+                V();
+                break;
+
+            default:
+                using (var brush = new SolidBrush(color))
+                    g.DrawString(ch.ToString(), SystemFonts.DefaultFont, brush, rect);
+                break;
+        }
     }
 
     private static Color Brighten(Color color)

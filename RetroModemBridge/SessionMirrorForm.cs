@@ -69,7 +69,7 @@ public sealed class SessionMirrorForm : Form
 
         var hint = new Label
         {
-            Text = "Shows the live screen data being sent to the retro computer. Enable input to type into the active session from this window.",
+            Text = "Shows the live 80-column CoCo/ANSI session data being sent to the retro computer. Enable input to type into the active session from this window.",
             AutoSize = true,
             ForeColor = Color.DimGray,
             Margin = new Padding(0, 0, 0, 0)
