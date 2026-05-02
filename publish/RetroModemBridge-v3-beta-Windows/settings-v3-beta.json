@@ -1,0 +1,27 @@
+{
+  "ComPort": null,
+  "RememberComPort": false,
+  "BaudRate": 19200,
+  "DefaultTcpPort": 23,
+  "DtrEnable": true,
+  "RtsEnable": true,
+  "EchoEnabled": false,
+  "TelnetFilteringEnabled": true,
+  "PlayStartupSound": true,
+  "DialDirectory": [
+    {
+      "Alias": "1",
+      "Name": "Dark Realms",
+      "Host": "darkrealms.ca",
+      "Port": 23,
+      "Notes": "ANSI BBS"
+    },
+    {
+      "Alias": "coco",
+      "Name": "CoCoNet",
+      "Host": "coconet.ddns.net",
+      "Port": 6809,
+      "Notes": "CoCoNet BBS"
+    }
+  ]
+}

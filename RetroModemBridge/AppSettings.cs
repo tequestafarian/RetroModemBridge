@@ -14,6 +14,7 @@ public sealed class AppSettings
     public bool TelnetFilteringEnabled { get; set; } = true;
     public bool PlayStartupSound { get; set; } = true;
     public List<BbsEntry> DialDirectory { get; set; } = CreateDefaultDirectory();
+    public List<DialHistoryEntry> DialHistory { get; set; } = new();
 
     private static string PortableDir => AppContext.BaseDirectory;
     private static string PortableSettingsPath => Path.Combine(PortableDir, "settings-v3-beta.json");
@@ -73,7 +74,7 @@ public sealed class AppSettings
 
     private static List<BbsEntry> CreateDefaultDirectory() =>
     [
-        new BbsEntry { Alias = "1", Name = "Dark Realms", Host = "darkrealms.ca", Port = 23, Notes = "ANSI BBS" },
-        new BbsEntry { Alias = "coco", Name = "CoCoNet", Host = "coconet.ddns.net", Port = 6809, Notes = "CoCoNet BBS" }
+        new BbsEntry { Alias = "1", Name = "Dark Realms", Host = "darkrealms.ca", Port = 23, Category = "General BBS", SystemType = "Telnet BBS", SupportsAnsi = true, IsFavorite = true, Notes = "ANSI BBS" },
+        new BbsEntry { Alias = "coco", Name = "CoCoNet", Host = "coconet.ddns.net", Port = 6809, Category = "CoCo / Tandy", SystemType = "CoCo BBS", SupportsAnsi = true, IsFavorite = true, Notes = "CoCoNet BBS" }
     ];
 }

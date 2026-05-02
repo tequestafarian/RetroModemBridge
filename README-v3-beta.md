@@ -180,3 +180,77 @@ The terminal is still a preview, but it should handle more BBS ANSI screens corr
 ## ANSI auto-detect improvements
 
 - Built-in terminal now replies to ANSI auto-detect prompts and ANSI cursor-position queries.
+
+## Latest v3 beta UI update
+
+- Enlarged the modem lights and moved the labels below each light for easier reading.
+
+## V3 BBS Companion additions in this build
+
+This build adds the first pass of the BBS Companion update:
+
+- Expanded BBS Directory fields: category, system type, ANSI support, favorite, last result, and notes.
+- Favorites: select a BBS row and click **Favorite** to star or unstar it.
+- Dial History: click **History** to view recent dial attempts and text-service calls.
+- Connection Testing: select a BBS row and click **Test** to check whether the host and port are reachable from Windows.
+- Beginner Setup: click **Setup** for a simple first-run checklist.
+- Built-in text services from the retro terminal:
+  - `ATDT HELP`
+  - `ATDT TIME`
+  - `ATDT MENU`
+  - `ATDT BBSLIST`
+  - `ATDT FAVORITES`
+
+The existing ANSI terminal form is still included. The bridge still supports normal Hayes-style commands such as `AT`, `ATI`, `AT&V`, `ATDT alias`, `ATDT host:port`, `ATDL`, and `ATH`.
+
+## V3 local BBS menu with ANSI
+
+This build upgrades `ATDT MENU` into a small local BBS-style menu served directly by RetroModem Bridge.
+
+From the vintage computer terminal:
+
+```text
+ATDT MENU
+```
+
+The bridge returns `CONNECT`, clears the screen, and displays an ANSI-colored menu.
+
+Menu options:
+
+```text
+1  BBS Directory
+2  Favorites
+3  Dial History
+4  Time Service
+5  Help / Commands
+6  About This Bridge
+Q  Disconnect
+```
+
+When viewing the BBS Directory or Favorites screen, enter the listed number to dial that BBS directly from the menu.
+
+Examples:
+
+```text
+ATDT MENU
+1
+03
+```
+
+That opens the directory, then dials entry 03.
+
+Other menu controls:
+
+```text
+M   Return to main menu
+Q   Disconnect from the local menu
+ATH Also exits the local menu
+```
+
+The menu uses ANSI colors, CP437 box drawing, and an ACiD-inspired BBS layout. It looks best in ANSI terminals that support IBM/CP437 characters, such as many classic BBS terminal setups.
+
+
+
+## v3 Beta 2 Release Notes
+
+See `RELEASE-NOTES-v3.0-beta.2.md` and `CHANGELOG-v3.0-beta.2.md`.

@@ -1,0 +1,10 @@
+RetroModem Bridge v3 beta with application icon
+
+What was added:
+- New RMB application icon (.ico) in Assets/retromodem-bridge.ico
+- Project ApplicationIcon set in RetroModemBridge.csproj
+- Main windows now load and show the RMB icon at runtime when available:
+  - MainForm
+  - TerminalForm
+  - BbsGuideImportForm
+  - SessionMirrorForm

@@ -1,0 +1,4 @@
+RetroModem Bridge v3 Beta 2
+Version: v3.0-beta.2
+Release type: beta / pre-release
+Recommended GitHub tag: v3.0-beta.2

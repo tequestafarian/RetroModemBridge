@@ -1,0 +1,44 @@
+{
+  "ComPort": null,
+  "RememberComPort": false,
+  "BaudRate": 19200,
+  "DefaultTcpPort": 23,
+  "DtrEnable": true,
+  "RtsEnable": true,
+  "EchoEnabled": false,
+  "TelnetFilteringEnabled": true,
+  "PlayStartupSound": true,
+  "DialDirectory": [
+    {
+      "Alias": "1",
+      "Name": "Dark Realms",
+      "Host": "darkrealms.ca",
+      "Port": 23,
+      "Category": "General BBS",
+      "SystemType": "Telnet BBS",
+      "SupportsAnsi": true,
+      "IsFavorite": true,
+      "LastDialed": null,
+      "LastResult": "",
+      "Notes": "ANSI BBS",
+      "DialTarget": "darkrealms.ca:23",
+      "DisplayName": "Dark Realms"
+    },
+    {
+      "Alias": "coco",
+      "Name": "CoCoNet",
+      "Host": "coconet.ddns.net",
+      "Port": 6809,
+      "Category": "CoCo / Tandy",
+      "SystemType": "CoCo BBS",
+      "SupportsAnsi": true,
+      "IsFavorite": true,
+      "LastDialed": null,
+      "LastResult": "",
+      "Notes": "CoCoNet BBS",
+      "DialTarget": "coconet.ddns.net:6809",
+      "DisplayName": "CoCoNet"
+    }
+  ],
+  "DialHistory": []
+}

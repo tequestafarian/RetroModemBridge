@@ -86,6 +86,7 @@ public sealed class TerminalForm : Form
         };
 
         _connectButton.Text = "Connect";
+        Icon = AppIconHelper.LoadAppIcon();
         _connectButton.Width = 105;
         _connectButton.Height = 34;
         _connectButton.Click += async (_, _) => await ConnectAsync();

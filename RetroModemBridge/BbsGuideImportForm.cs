@@ -30,6 +30,7 @@ public sealed class BbsGuideImportForm : Form
     private void InitializeComponent()
     {
         Text = "Import from Telnet BBS Guide";
+        Icon = AppIconHelper.LoadAppIcon();
         StartPosition = FormStartPosition.CenterParent;
         MinimumSize = new Size(920, 620);
         Size = new Size(1050, 720);
