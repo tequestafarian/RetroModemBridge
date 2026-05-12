@@ -2647,21 +2647,7 @@ public sealed class ModemBridge : IDisposable
 
     public void HangUp(string reason, bool silent = false)
     {
-                try
-        {
-            _ircCts?.Cancel();
-            _ircSession?.Dispose();
-        }
-        catch
-        {
-        }
-        finally
-        {
-            _ircCts?.Dispose();
-            _ircCts = null;
-            _ircSession = null;
-        }
-ResetLocalBbsSession();
+        ResetLocalBbsSession();
 
         lock (_sync)
         {

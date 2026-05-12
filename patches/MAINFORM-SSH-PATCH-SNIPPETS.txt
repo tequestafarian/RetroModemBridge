@@ -1,0 +1,142 @@
+RetroModem Bridge SSH Patch Snippets
+====================================
+
+These snippets are intentionally separate because MainForm.cs changes a lot between builds.
+
+1) Add fields inside MainForm class:
+
+private SshProxySession? _sshSession;
+private bool _sshConnected;
+
+
+2) In your ATDT handler, after you extract the dial target, add this BEFORE the Telnet connect code:
+
+if (dialTarget.StartsWith("ssh://", StringComparison.OrdinalIgnoreCase))
+{
+    await ConnectSshAsync(dialTarget);
+    return;
+}
+
+
+3) Add this helper method inside MainForm class.
+
+IMPORTANT: You may need to rename these calls to match your current app:
+
+- LogLine(...) should be replaced with your log method if different.
+- WriteSerialBytes(...) should be replaced with your serial write method if different.
+- SetOnlineState(...) should be replaced with your ONLINE/DCD status light method if different.
+
+private async Task ConnectSshAsync(string dialTarget)
+{
+    if (!SshDialProfile.TryParse(dialTarget, out var profile, out var error))
+    {
+        LogLine("SSH dial error: " + error);
+        return;
+    }
+
+    var password = SshPasswordPrompt.Ask(this, profile.DisplayName);
+    if (password == null)
+    {
+        LogLine("SSH cancelled.");
+        return;
+    }
+
+    _sshSession?.Disconnect();
+    _sshSession = new SshProxySession();
+
+    _sshSession.Log += message =>
+    {
+        try
+        {
+            BeginInvoke(new Action(() => LogLine(message)));
+        }
+        catch { }
+    };
+
+    _sshSession.BytesReceived += bytes =>
+    {
+        try
+        {
+            BeginInvoke(new Action(() =>
+            {
+                // TODO: Replace this with your existing serial output method.
+                // Examples from apps like this are often:
+                // _serialPort.Write(bytes, 0, bytes.Length);
+                // serialPort.Write(bytes, 0, bytes.Length);
+                WriteSerialBytes(bytes);
+            }));
+        }
+        catch { }
+    };
+
+    _sshSession.Disconnected += () =>
+    {
+        _sshConnected = false;
+        try
+        {
+            BeginInvoke(new Action(() =>
+            {
+                LogLine("SSH disconnected.");
+                // TODO: update DCD/ONLINE lights here if your app has a method for it.
+                // SetOnlineState(false);
+            }));
+        }
+        catch { }
+    };
+
+    try
+    {
+        await _sshSession.ConnectAsync(profile, password);
+        _sshConnected = true;
+        LogLine("CONNECT SSH " + profile.DisplayName);
+        // TODO: update DCD/ONLINE lights here if your app has a method for it.
+        // SetOnlineState(true);
+    }
+    catch (Exception ex)
+    {
+        _sshConnected = false;
+        LogLine("SSH connect failed: " + ex.Message);
+        _sshSession?.Disconnect();
+    }
+}
+
+
+4) In your serial receive handler, where bytes from the vintage computer normally go to Telnet,
+add this BEFORE the Telnet forwarding code:
+
+if (_sshConnected && _sshSession?.IsConnected == true)
+{
+    await _sshSession.SendBytesAsync(bufferFromSerial);
+    return;
+}
+
+If your code has byte count variables, use the actual bytes read, for example:
+
+if (_sshConnected && _sshSession?.IsConnected == true)
+{
+    var actual = new byte[bytesRead];
+    Array.Copy(buffer, actual, bytesRead);
+    await _sshSession.SendBytesAsync(actual);
+    return;
+}
+
+
+5) In your hangup/disconnect method, add:
+
+_sshConnected = false;
+_sshSession?.Disconnect();
+_sshSession = null;
+
+
+6) Add this temporary helper only if you do not already have an equivalent serial write method:
+
+private void WriteSerialBytes(byte[] bytes)
+{
+    if (bytes == null || bytes.Length == 0)
+        return;
+
+    if (_serialPort != null && _serialPort.IsOpen)
+        _serialPort.Write(bytes, 0, bytes.Length);
+}
+
+You may need to change _serialPort to your actual SerialPort field name.
