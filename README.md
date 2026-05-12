@@ -10,8 +10,9 @@ Version 3.4 also adds an experimental **Local Door Game Mode**. This lets the re
 - Telnet BBS dialing with aliases like `ATDT DARK` or `ATDT coco`.
 - BBS Directory with import support for the bundled Telnet BBS Guide list.
 - Separate **BBS Directory** and **Door Games** tabs.
-- Retro-side `ATDT MENU` also separates BBS listings from Door Game listings. Use `ATDT DOORS` to jump straight to Door Games.
-- Local Door Game Mode with `DOOR32.SYS` generation.
+- Retro-side `ATDT MENU` separates BBS listings from Door Game listings.
+- `ATDT DOORS` jumps straight to the local Door Games list.
+- Local Door Game Mode with automatic `DOOR32.SYS` generation.
 - Door game input assist for single-key prompts.
 - Optional door output paging with a `More` prompt.
 - Built-in ANSI terminal preview and Session Mirror.
@@ -20,7 +21,9 @@ Version 3.4 also adds an experimental **Local Door Game Mode**. This lets the re
 
 ## Local Door Game Mode
 
-Door games are configured in the **Door Games** tab. A typical Usurper Reborn setup uses:
+Door games are configured in the **Door Games** tab.
+
+A typical Usurper Reborn setup uses:
 
 ```text
 Arguments: --door32 {door32} --stdio
@@ -28,10 +31,24 @@ Arguments: --door32 {door32} --stdio
 
 RetroModem Bridge creates the `DOOR32.SYS` file automatically and replaces `{door32}` with the generated file path.
 
-From the retro computer, dial the door alias just like a BBS. You can also use `ATDT MENU` and choose **Door Games**, or type `ATDT DOORS` to see only local door entries:
+From the retro computer, dial the door alias just like a BBS:
 
 ```text
 ATDT USURPER
+```
+
+You can also use:
+
+```text
+ATDT MENU
+```
+
+Then choose **Door Games**.
+
+To jump straight to local door entries, use:
+
+```text
+ATDT DOORS
 ```
 
 Recommended first settings for Usurper Reborn:
@@ -47,16 +64,18 @@ If the More prompt interferes with ANSI screens, disable output paging for that 
 
 ## Build
 
-Install the .NET 8 SDK for Windows, then run:
+Install the .NET 8 SDK for Windows.
+
+From the root of the repository, run:
 
 ```powershell
-.\scripts\scripts\publish-exe-v3.4.ps1
+.\scripts\publish-exe-v3.4.bat
 ```
 
 Or double-click:
 
 ```text
-scripts\scripts\publish-exe-v3.4.bat
+scripts\publish-exe-v3.4.bat
 ```
 
 The published executable should appear in:
@@ -77,7 +96,7 @@ publish\v3.4\RetroModemBridge-v3.4.exe
 ATDT coco
 ```
 
-or for a local door game:
+For a local door game, type:
 
 ```text
 ATDT USURPER
