@@ -50,13 +50,13 @@ If the More prompt interferes with ANSI screens, disable output paging for that 
 Install the .NET 8 SDK for Windows, then run:
 
 ```powershell
-.\scripts\publish-exe-v3.4.ps1
+.\scripts\scripts\publish-exe-v3.4.ps1
 ```
 
 Or double-click:
 
 ```text
-scripts\publish-exe-v3.4.bat
+scripts\scripts\publish-exe-v3.4.bat
 ```
 
 The published executable should appear in:
