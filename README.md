@@ -69,19 +69,25 @@ Install the .NET 8 SDK for Windows.
 From the root of the repository, run:
 
 ```powershell
-.\scripts\publish-exe-v3.4.bat
-```
-
-Or double-click:
-
-```text
-scripts\publish-exe-v3.4.bat
+dotnet publish .\RetroModemBridge\RetroModemBridge.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o .\publish\v3.4
 ```
 
 The published executable should appear in:
 
 ```text
-publish\v3.4\RetroModemBridge-v3.4.exe
+publish\v3.4\RetroModemBridge.exe
+```
+
+You can rename it to:
+
+```text
+RetroModemBridge-v3.4.exe
+```
+
+Optional rename command:
+
+```powershell
+Rename-Item .\publish\v3.4\RetroModemBridge.exe RetroModemBridge-v3.4.exe
 ```
 
 ## Basic setup
