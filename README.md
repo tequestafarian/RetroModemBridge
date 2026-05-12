@@ -66,28 +66,28 @@ If the More prompt interferes with ANSI screens, disable output paging for that 
 
 Install the .NET 8 SDK for Windows.
 
-From the root of the repository, run:
+Open PowerShell from the root of the repository, then run:
 
 ```powershell
-dotnet publish .\RetroModemBridge\RetroModemBridge.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o .\publish\v3.4
+dotnet publish .\RetroModemBridge\RetroModemBridge.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:PublishReadyToRun=false -p:IncludeNativeLibrariesForSelfExtract=true -o .\publish\v3.4
+```
+
+If PowerShell says `dotnet` is not recognized, use the full path instead:
+
+```powershell
+& "C:\Program Files (x86)\dotnet\dotnet.exe" publish .\RetroModemBridge\RetroModemBridge.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:PublishReadyToRun=false -p:IncludeNativeLibrariesForSelfExtract=true -o .\publish\v3.4
 ```
 
 The published executable should appear in:
 
 ```text
-publish\v3.4\RetroModemBridge.exe
+publish\v3.4\RetroModemBridge-v3.4.exe
 ```
 
-You can rename it to:
-
-```text
-RetroModemBridge-v3.4.exe
-```
-
-Optional rename command:
+To verify the build output, run:
 
 ```powershell
-Rename-Item .\publish\v3.4\RetroModemBridge.exe RetroModemBridge-v3.4.exe
+dir .\publish\v3.4
 ```
 
 ## Basic setup
